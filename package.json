@@ -1,0 +1,33 @@
+{
+  "name": "@cuped-io/flame-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "cuped.io client-side SDKs (vanilla flame + framework bindings)",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter './packages/*' build",
+    "test": "pnpm --filter './packages/*' test",
+    "typecheck": "pnpm --filter './packages/*' typecheck",
+    "lint": "eslint packages/*/src",
+    "format": "prettier --write packages/*/src",
+    "example:next": "pnpm --filter @cuped-io/example-next-app dev",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.17.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.53.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "lint-staged": {
+    "packages/*/src/**/*.{ts,tsx}": [
+      "eslint --fix"
+    ]
+  }
+}

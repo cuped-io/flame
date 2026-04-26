@@ -1,0 +1,75 @@
+{
+  "name": "@cuped-io/flame-edge",
+  "version": "0.1.0",
+  "description": "Edge-runtime resolver + signed cookie utilities for cuped.io zero-flash SSR",
+  "license": "MIT",
+  "author": "Mike Ross <michael.s.ross@protonmail.com>",
+  "homepage": "https://cuped.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cuped-io/flame.git",
+    "directory": "packages/flame-edge"
+  },
+  "bugs": {
+    "url": "https://github.com/cuped-io/flame/issues"
+  },
+  "keywords": [
+    "ab-testing",
+    "experimentation",
+    "cuped",
+    "edge",
+    "ssr",
+    "next.js"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.mjs",
+      "require": "./dist/next.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "format": "prettier --write src/",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@cuped-io/flame": "workspace:*"
+  },
+  "peerDependencies": {
+    "next": "^13.0.0 || ^14.0.0 || ^15.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vite": "^6.0.7",
+    "vite-plugin-dts": "^4.4.0",
+    "vitest": "^4.0.17"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
