@@ -1,6 +1,6 @@
 {
   "name": "@cuped-io/example-next-app",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Next.js App Router example demonstrating zero-flash SSR with @cuped-io/flame-edge",
   "type": "module",
