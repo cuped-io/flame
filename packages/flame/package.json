@@ -36,6 +36,10 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build && vite build --config vite.config.npm.ts",

@@ -41,6 +41,10 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc --noEmit",

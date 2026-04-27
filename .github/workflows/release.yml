@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Cancel in-flight release runs if a newer commit lands; we only ever
+# want the most recent main to be the source of truth for "what's released".
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # changesets/action commits version bumps + tags
+      pull-requests: write     # ...and opens the "Version Packages" PR
+      id-token: write          # OIDC token for npm trusted publishing + provenance
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so changesets can compute changelogs accurately.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # flame-react and flame-edge import types from @cuped-io/flame's built
+      # dist; the release script builds everything but changesets/action
+      # may inspect packages before that runs.
+      - name: Build @cuped-io/flame
+        run: pnpm --filter @cuped-io/flame build
+
+      - name: Create Release PR or Publish
+        uses: changesets/action@v1
+        with:
+          version: pnpm version-packages
+          publish: pnpm release
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+        env:
+          # No NPM_TOKEN — auth comes from the OIDC token via id-token: write
+          # and the trusted-publisher config on npmjs.com.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
