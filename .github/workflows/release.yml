@@ -25,12 +25,19 @@ jobs:
 
       - uses: pnpm/action-setup@v5
         with:
-          version: 9
+          version: 10
 
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
+          # Required for npm OIDC trusted publishing: the .npmrc auth-resolution
+          # path keys off this registry URL during the token exchange.
+          registry-url: 'https://registry.npmjs.org'
+
+      # Node 22 ships with npm 10.x; OIDC trusted publishing needs npm 11.5.1+.
+      - name: Upgrade npm to support OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
