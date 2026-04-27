@@ -1,6 +1,6 @@
 {
   "name": "@cuped-io/flame-react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React bindings for the cuped.io A/B testing SDK (@cuped-io/flame)",
   "license": "MIT",
   "author": "Mike Ross <michael.s.ross@protonmail.com>",
