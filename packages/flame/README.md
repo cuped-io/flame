@@ -43,7 +43,10 @@ if (flame.isInVariant('hero-cta', 'treatment')) {
   // ...
 }
 
-flame.observe('signup', { plan: 'pro' });
+// Fire any custom event. Define a matching goal with the same name
+// in the cuped.io dashboard (Settings → Goals → Custom event) for
+// it to count toward an experiment.
+flame.observe('vote_cast', { game_id: 'g42', option: 'controller' });
 ```
 
 ## Public API

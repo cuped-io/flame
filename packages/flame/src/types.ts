@@ -218,21 +218,41 @@ export interface Variant {
 export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed';
 
 /**
- * Type of event to track for a goal
+ * Goal template / category. The backend matches all variants by event
+ * name — this enum is a UI/SDK template hint:
+ * - `click` / `submit` — SDK auto-tracker registers a DOM listener for
+ *   the goal's `selector` and fires `goal.name` on match.
+ * - `pageview` — Backend match additionally filters by `url_pattern`.
+ * - `custom` — Developer-fired event (e.g. `useObserve('vote_cast')`),
+ *   no DOM auto-tracking. Use for non-DOM events like form
+ *   completions, API responses, or domain actions.
  */
-export type GoalType = 'click' | 'submit' | 'pageview';
+export type GoalType = 'click' | 'submit' | 'pageview' | 'custom';
 
 /**
- * A conversion goal for tracking (matches the cuped API)
+ * A conversion goal for tracking (matches the cuped API). All goal
+ * types are matched by event name on the backend; the variation is in
+ * how the event gets fired (SDK auto-tracker vs developer code).
  */
 export interface Goal {
-  /** Name of the goal (e.g., "add_to_cart", "checkout") */
+  /**
+   * Name of the goal — also the event name used to match incoming
+   * observations. Examples: `"add_to_cart"`, `"vote_cast"`,
+   * `"signup_completed"`. For pageview goals this is just a label;
+   * the SDK fires the literal `"pageview"` event for matching.
+   */
   name: string;
-  /** CSS selector to match elements (required for click/submit goals) */
+  /**
+   * CSS selector for the SDK auto-tracker on `click`/`submit` goals.
+   * Optional — when missing, the goal is dev-fired by calling
+   * `flame.observe(goal.name)` from your code instead of being
+   * auto-tracked from a DOM event. The backend matcher never reads
+   * this field.
+   */
   selector?: string;
   /** URL pattern to match for pageview goals (e.g., "/product/*", "/checkout/**") */
   url_pattern?: string;
-  /** Event type to listen for */
+  /** Goal template / category. See {@link GoalType}. */
   type: GoalType;
 }
 

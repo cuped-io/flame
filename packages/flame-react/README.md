@@ -50,10 +50,20 @@ function Hero2() {
   );
 }
 
-// Track conversions
-function CheckoutButton() {
+// Track a custom event. The event name is matched against goals
+// defined in your cuped.io dashboard (Settings → Goals → Custom event).
+function VoteButton({ gameId, option }: { gameId: string; option: string }) {
   const observe = useObserve();
-  return <button onClick={() => observe('checkout')}>Checkout</button>;
+  return (
+    <button
+      onClick={() => {
+        castVote(option);
+        observe('vote_cast', { game_id: gameId, option });
+      }}
+    >
+      Vote
+    </button>
+  );
 }
 ```
 

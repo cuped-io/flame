@@ -4,12 +4,22 @@ import { CupedContext } from './context';
 /**
  * Returns a stable function that records an observation.
  *
+ * The event name you pass here is what the backend uses to match
+ * against goals — define a goal with the same name in the cuped.io
+ * dashboard (Settings → Goals → Custom event) for it to count toward
+ * an experiment.
+ *
  * ```tsx
- * function SignupForm() {
+ * function VoteButton({ gameId, option }: Props) {
  *   const observe = useObserve();
  *   return (
- *     <button onClick={() => observe('signup_completed', { plan: 'pro' })}>
- *       Sign up
+ *     <button
+ *       onClick={() => {
+ *         castVote(option);
+ *         observe('vote_cast', { game_id: gameId, option });
+ *       }}
+ *     >
+ *       Vote
  *     </button>
  *   );
  * }

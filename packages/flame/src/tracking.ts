@@ -92,11 +92,20 @@ export class TrackingManager {
   }
 
   /**
-   * Register goals for auto-detection (e.g., e-commerce goals)
+   * Register goals for DOM auto-tracking. Only `click` and `submit`
+   * goals get registered here — they need DOM listeners on
+   * `goal.selector` so the SDK can fire `goal.name` when the user
+   * clicks/submits a matching element.
+   *
+   * `pageview` and `custom` goals are intentionally skipped:
+   * - `pageview` is fired by `observePageview()` (called from `init`
+   *   and on SPA navigation).
+   * - `custom` is fired manually by the developer via
+   *   `flame.observe(goal.name)` / `useObserve()` — there's no DOM
+   *   event to listen to.
    */
   registerGoals(_experimentId: string, goals: Goal[]): void {
     for (const goal of goals) {
-      // Only register click/submit goals for auto-detection
       if (goal.type === 'click' || goal.type === 'submit') {
         this.registeredGoals.push({ goal });
       }
