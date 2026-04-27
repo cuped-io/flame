@@ -24,6 +24,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # flame-react and flame-edge import types from @cuped-io/flame's built
+      # dist (per its package.json `exports.types`), so the SDK has to be
+      # built before downstream packages can typecheck.
+      - name: Build @cuped-io/flame (provides types for downstream packages)
+        run: pnpm --filter @cuped-io/flame build
+
       - name: Type check
         run: pnpm typecheck
 
@@ -40,7 +46,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: dist/
+          path: packages/flame/dist/
 
   deploy:
     needs: build
