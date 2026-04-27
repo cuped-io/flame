@@ -1,6 +1,6 @@
 {
   "name": "@cuped-io/flame",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Client-side A/B testing SDK for cuped.io",
   "license": "MIT",
   "author": "Mike Ross <michael.s.ross@protonmail.com>",
