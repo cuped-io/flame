@@ -29,7 +29,10 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          # Node 24 bundles npm 11, which is required for OIDC trusted
+          # publishing. Node 22 ships npm 10, which silently falls back to
+          # anonymous and gets a misleading 404 from the registry.
+          node-version: 24
           cache: pnpm
           # Required for npm OIDC trusted publishing: the .npmrc auth-resolution
           # path keys off this registry URL during the token exchange.
