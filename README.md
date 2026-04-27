@@ -1,14 +1,19 @@
 # flame
 
+[![@cuped-io/flame on npm](https://img.shields.io/npm/v/@cuped-io/flame?label=%40cuped-io%2Fflame)](https://www.npmjs.com/package/@cuped-io/flame)
+[![@cuped-io/flame-react on npm](https://img.shields.io/npm/v/@cuped-io/flame-react?label=flame-react)](https://www.npmjs.com/package/@cuped-io/flame-react)
+[![@cuped-io/flame-edge on npm](https://img.shields.io/npm/v/@cuped-io/flame-edge?label=flame-edge)](https://www.npmjs.com/package/@cuped-io/flame-edge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 Client-side SDKs for [cuped.io](https://cuped.io) — A/B testing with CUPED variance reduction.
 
 This repo is a pnpm workspace with three packages:
 
-| Package | Role |
-|---|---|
-| [`@cuped-io/flame`](./packages/flame) | Core SDK. IIFE for `<script>` tag use; ESM/CJS for npm consumers. |
-| [`@cuped-io/flame-react`](./packages/flame-react) | React bindings: `<CupedProvider>`, `useExperiment`, `<Experiment>`, `useObserve`. |
-| [`@cuped-io/flame-edge`](./packages/flame-edge) | Edge-runtime resolver + signed cookie utilities for zero-flash SSR. Web Crypto only. |
+| Package | npm | Source | Role |
+|---|---|---|---|
+| `@cuped-io/flame` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame) | [./packages/flame](./packages/flame) | Core SDK. IIFE for `<script>` tag use; ESM/CJS for npm consumers. |
+| `@cuped-io/flame-react` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame-react) | [./packages/flame-react](./packages/flame-react) | React bindings: `<CupedProvider>`, `useExperiment`, `<Experiment>`, `useObserve`. |
+| `@cuped-io/flame-edge` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame-edge) | [./packages/flame-edge](./packages/flame-edge) | Edge resolver + signed cookie utilities for zero-flash SSR. Web Crypto only. |
 
 ## What it does
 
@@ -20,7 +25,11 @@ This repo is a pnpm workspace with three packages:
 
 ## Quick start
 
-**Script tag** (no-code DOM mutations):
+You'll need a DSN. Sign up at [cuped.io](https://cuped.io), create a project, and copy the DSN from **Settings → Install snippet** (it looks like `https://YOUR_KEY@api.cuped.io`).
+
+### Option 1: Script tag (no-code DOM mutations)
+
+Drop this in your `<head>` and define variants in the dashboard:
 
 ```html
 <script
@@ -29,7 +38,7 @@ This repo is a pnpm workspace with three packages:
 ></script>
 ```
 
-**React / Next.js** (code-driven variants):
+### Option 2: React (CSR)
 
 ```bash
 pnpm add @cuped-io/flame @cuped-io/flame-react
@@ -38,22 +47,111 @@ pnpm add @cuped-io/flame @cuped-io/flame-react
 ```tsx
 import { CupedProvider, useExperiment } from '@cuped-io/flame-react';
 
-<CupedProvider dsn="https://YOUR_KEY@api.cuped.io">
-  <App />
-</CupedProvider>;
+function App() {
+  return (
+    <CupedProvider dsn="https://YOUR_KEY@api.cuped.io">
+      <Hero />
+    </CupedProvider>
+  );
+}
 
 function Hero() {
   const { variant } = useExperiment('hero-cta');
-  return <button>{variant === 'treatment' ? 'Buy now' : 'Get started'}</button>;
+  return <button>{variant?.name === 'treatment' ? 'Buy now' : 'Get started'}</button>;
 }
 ```
 
-For zero-flash SSR with Next.js App Router, also install `@cuped-io/flame-edge` and follow [`examples/next-app`](./examples/next-app).
+### Option 3: Next.js App Router with zero-flash SSR
+
+The recommended setup for Next.js. Variants are resolved at the edge before the first byte renders, so server HTML matches the assigned variant from request #1.
+
+```bash
+pnpm add @cuped-io/flame @cuped-io/flame-react @cuped-io/flame-edge
+```
+
+`.env.local`:
+
+```
+CUPED_DSN=https://YOUR_KEY@api.cuped.io
+NEXT_PUBLIC_CUPED_DSN=https://YOUR_KEY@api.cuped.io
+CUPED_COOKIE_SECRET=<generate with: openssl rand -base64 32>
+```
+
+`middleware.ts`:
+
+```ts
+import { createCupedMiddleware } from '@cuped-io/flame-edge/next';
+
+export default createCupedMiddleware({
+  dsn: process.env.CUPED_DSN!,
+  secret: process.env.CUPED_COOKIE_SECRET!,
+});
+
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|api/|favicon.ico).*)'],
+};
+```
+
+`app/providers.tsx`:
+
+```tsx
+'use client';
+import { CupedProvider } from '@cuped-io/flame-react';
+import type { PrehydratedState } from '@cuped-io/flame';
+
+export function Providers({
+  children,
+  prehydrated,
+}: {
+  children: React.ReactNode;
+  prehydrated?: PrehydratedState;
+}) {
+  return (
+    <CupedProvider
+      dsn={process.env.NEXT_PUBLIC_CUPED_DSN!}
+      prehydrated={prehydrated}
+    >
+      {children}
+    </CupedProvider>
+  );
+}
+```
+
+`app/layout.tsx`:
+
+```tsx
+import { cookies } from 'next/headers';
+import { readPrehydratedForServerComponent } from '@cuped-io/flame-edge/next';
+import { Providers } from './providers';
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const prehydrated = await readPrehydratedForServerComponent(
+    await cookies(),
+    process.env.CUPED_COOKIE_SECRET!,
+  );
+  return (
+    <html>
+      <body>
+        <Providers prehydrated={prehydrated ?? undefined}>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+That's it — `useExperiment` and `<Experiment>` work the same way as Option 2.
 
 ## Examples
 
 - [`examples/script-tag`](./examples/script-tag) — Static HTML page exercising all 8 change types.
-- [`examples/next-app`](./examples/next-app) — Next.js App Router app with edge middleware + signed prehydrated cookie.
+- [`examples/next-app`](./examples/next-app) — Next.js App Router app with edge middleware + signed prehydrated cookie. Includes verification steps.
+
+## Documentation
+
+- [React + Next.js guide](https://cuped.io/docs/react-sdk) — full reference including all hooks, the `<Experiment>` component, and zero-flash SSR
+- [Script-tag SDK](https://cuped.io/docs/sdk)
+- [REST API](https://cuped.io/docs/api)
+- [Methodology: CUPED & Bayesian](https://cuped.io/docs/cuped)
 
 ## Development
 
@@ -64,6 +162,8 @@ pnpm typecheck
 pnpm lint
 pnpm build        # IIFE + ESM/CJS across packages
 ```
+
+Releases are managed by [changesets](https://github.com/changesets/changesets) and published to npm via OIDC trusted publishing with [provenance attestations](https://docs.npmjs.com/generating-provenance-statements).
 
 ## License
 
