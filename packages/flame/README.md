@@ -43,9 +43,9 @@ if (flame.isInVariant('hero-cta', 'treatment')) {
   // ...
 }
 
-// Fire any custom event. Define a matching goal with the same name
-// in the cuped.io dashboard (Settings → Goals → Custom event) for
-// it to count toward an experiment.
+// Fire any custom event. Define a matching goal once at the project
+// level on cuped.io (Project → Goals → Custom event); any experiment
+// in the project can then attach it as primary or secondary.
 flame.observe('vote_cast', { game_id: 'g42', option: 'controller' });
 ```
 

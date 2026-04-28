@@ -50,8 +50,10 @@ function Hero2() {
   );
 }
 
-// Track a custom event. The event name is matched against goals
-// defined in your cuped.io dashboard (Settings → Goals → Custom event).
+// Track a custom event. The event name matches against goals defined
+// once at the project level on cuped.io (Project → Goals → Custom event);
+// any experiment in the project can then attach the goal as primary
+// or secondary.
 function VoteButton({ gameId, option }: { gameId: string; option: string }) {
   const observe = useObserve();
   return (

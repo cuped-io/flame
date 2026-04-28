@@ -5,9 +5,9 @@ import { CupedContext } from './context';
  * Returns a stable function that records an observation.
  *
  * The event name you pass here is what the backend uses to match
- * against goals — define a goal with the same name in the cuped.io
- * dashboard (Settings → Goals → Custom event) for it to count toward
- * an experiment.
+ * against goals — define a matching goal once at the project level
+ * on cuped.io (Project → Goals → Custom event) and any experiment
+ * in that project can attach it as primary or secondary.
  *
  * ```tsx
  * function VoteButton({ gameId, option }: Props) {
