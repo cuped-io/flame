@@ -1,5 +1,13 @@
 # @cuped-io/flame-edge
 
+## 0.2.1
+
+### Patch Changes
+
+- 764a1b2: Update README + JSDoc pointers from "Settings → Goals → Custom event" to "Project → Goals → Custom event" — goals are first-class project-scoped entities now, defined on a per-project Goals page rather than under account Settings. The runtime API is unchanged; this is a docs/JSDoc fix only.
+- Updated dependencies [764a1b2]
+  - @cuped-io/flame@0.3.1
+
 ## 0.2.0
 
 ### Minor Changes
