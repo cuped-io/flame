@@ -1,5 +1,14 @@
 # @cuped-io/example-next-app
 
+## 0.0.3
+
+### Patch Changes
+
+- Updated dependencies [764a1b2]
+  - @cuped-io/flame@0.3.1
+  - @cuped-io/flame-react@0.2.1
+  - @cuped-io/flame-edge@0.2.1
+
 ## 0.0.2
 
 ### Patch Changes

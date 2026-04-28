@@ -1,6 +1,6 @@
 {
   "name": "@cuped-io/flame-edge",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Edge-runtime resolver + signed cookie utilities for cuped.io zero-flash SSR",
   "license": "MIT",
   "author": "Mike Ross <michael.s.ross@protonmail.com>",
