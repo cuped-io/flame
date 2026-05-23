@@ -230,11 +230,21 @@ export class TrackingManager {
     const fired = new Set<string>();
 
     for (const { goal } of this.registeredGoals) {
-      if (goal.type !== eventType || !goal.selector) {
+      if (goal.type !== eventType) {
         continue;
       }
 
-      const matches = this.elementMatchesGoal(element, goal.selector);
+      // A submit goal with no selector matches any form submit — the
+      // no-code "track any form on the page" case. A click goal with no
+      // selector has no target to bind to (every click would fire it),
+      // so it's only observable manually via flame.observe(); skip it.
+      let matches: boolean;
+      if (goal.selector) {
+        matches = this.elementMatchesGoal(element, goal.selector);
+      } else {
+        matches = eventType === 'submit';
+      }
+
       if (this.debug) {
         console.log(`[Flame] Goal ${goal.name} match:`, matches);
       }

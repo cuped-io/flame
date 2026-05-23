@@ -295,6 +295,51 @@ describe('TrackingManager', () => {
       // Should only fire one observation, not two
       expect(mockApiClient.trackObservationBeacon).toHaveBeenCalledTimes(1);
     });
+
+    it('should fire a submit goal with no selector on any form submit', () => {
+      document.body.innerHTML = `
+        <form id="contact"><button type="submit">Send</button></form>
+      `;
+
+      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
+      manager.registerAssignment({
+        experimentId: 'exp-1',
+        variantId: 'variant-1',
+        userId: 'user-123',
+        assignedAt: '2024-01-01T00:00:00Z',
+      });
+      // No selector — the no-code "track any form submit" case.
+      manager.registerGoals('exp-1', [{ name: 'lead_submitted', type: 'submit' }]);
+      manager.startAutoTracking();
+
+      const form = document.querySelector('#contact') as HTMLFormElement;
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+      expect(mockApiClient.trackObservationBeacon).toHaveBeenCalledWith(
+        'user-123',
+        'lead_submitted',
+        expect.objectContaining({ event_type: 'submit' }),
+        [{ experiment_id: 'exp-1', variant_id: 'variant-1' }]
+      );
+    });
+
+    it('should NOT fire a click goal with no selector (clicks need an explicit target)', () => {
+      document.body.innerHTML = `<button id="cta">Buy</button>`;
+
+      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
+      manager.registerAssignment({
+        experimentId: 'exp-1',
+        variantId: 'variant-1',
+        userId: 'user-123',
+        assignedAt: '2024-01-01T00:00:00Z',
+      });
+      manager.registerGoals('exp-1', [{ name: 'any_click', type: 'click' }]);
+      manager.startAutoTracking();
+
+      (document.querySelector('#cta') as HTMLElement).click();
+
+      expect(mockApiClient.trackObservationBeacon).not.toHaveBeenCalled();
+    });
   });
 
   describe('debug mode', () => {
