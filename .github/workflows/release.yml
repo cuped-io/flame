@@ -18,16 +18,16 @@ jobs:
       pull-requests: write     # ...and opens the "Version Packages" PR
       id-token: write          # OIDC token for npm trusted publishing + provenance
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           # Full history so changesets can compute changelogs accurately.
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 10
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           # Node 24 bundles npm 11, which is required for OIDC trusted
           # publishing. Node 22 ships npm 10, which silently falls back to
@@ -48,7 +48,7 @@ jobs:
         run: pnpm --filter @cuped-io/flame build
 
       - name: Create Release PR or Publish
-        uses: changesets/action@v1
+        uses: changesets/action@63a615b9cd06ba9a3e6d13796c7fbcb080a60a0b # v1
         with:
           version: pnpm version-packages
           publish: pnpm release
