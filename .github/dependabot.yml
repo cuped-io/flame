@@ -1,0 +1,31 @@
+# Keeps the SHA-pinned GitHub Actions fresh. We pin every action to an
+# immutable commit SHA for supply-chain safety, which means they no
+# longer auto-update — including for security patches. Dependabot bumps
+# the pin in place (rewrites @<sha> + the trailing `# vX` comment),
+# grouped weekly into one PR to keep noise low.
+#
+# Scope is the pinned surface (github-actions). flame is a *published*
+# SDK family, so the npm dependency tree is also a real downstream
+# supply-chain surface — but a `npm` ecosystem block here would be
+# noisy across the pnpm workspace. Add one (Dependabot reads
+# pnpm-lock.yaml) if you want proactive package bumps:
+#
+#   - package-ecosystem: npm
+#     directory: /
+#     schedule:
+#       interval: weekly
+#     open-pull-requests-limit: 10
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One PR for all action bumps instead of one per action.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "infra(ci)"
