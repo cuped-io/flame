@@ -64,6 +64,12 @@ jobs:
       - name: Create Pages project if not exists
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
+          # Pin the wrangler CLI explicitly. wrangler-action v4 defaults
+          # wranglerVersion to `latest`, which would float the CLI on
+          # every deploy; v3 used to pin a default. Pin here to keep the
+          # no-float principle the rest of CI follows. Bump manually
+          # (Dependabot does not track this string input).
+          wranglerVersion: "4.94.0"
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages project create flame --production-branch=main
@@ -72,6 +78,7 @@ jobs:
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
+          wranglerVersion: "4.94.0"
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy dist --project-name=flame
