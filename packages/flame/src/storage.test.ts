@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OfflineStorage, DEFAULT_MAX_OFFLINE_EVENTS, DEFAULT_OFFLINE_TTL_MS } from './storage';
-import type { CreateObservationRequest } from './types';
+import type { CreateEventRequest } from './types';
 
-// Helper to create a test observation
-const createObservation = (eventType: string): CreateObservationRequest => ({
+// Helper to create a test event
+const createEvent = (eventType: string): CreateEventRequest => ({
   user_id: 'test_user',
   event_type: eventType,
 });
@@ -76,11 +76,11 @@ describe('OfflineStorage', () => {
   });
 
   describe('save and load', () => {
-    it('should save and load observations', () => {
+    it('should save and load events', () => {
       const storage = new OfflineStorage('test-dsn');
-      const observations = [createObservation('pageview'), createObservation('click')];
+      const events = [createEvent('pageview'), createEvent('click')];
 
-      storage.save(observations);
+      storage.save(events);
       const loaded = storage.load();
 
       expect(loaded).toHaveLength(2);
@@ -88,11 +88,11 @@ describe('OfflineStorage', () => {
       expect(loaded[1].event_type).toBe('click');
     });
 
-    it('should append to existing observations', () => {
+    it('should append to existing events', () => {
       const storage = new OfflineStorage('test-dsn');
 
-      storage.save([createObservation('pageview')]);
-      storage.save([createObservation('click')]);
+      storage.save([createEvent('pageview')]);
+      storage.save([createEvent('click')]);
 
       const loaded = storage.load();
       expect(loaded).toHaveLength(2);
@@ -117,8 +117,8 @@ describe('OfflineStorage', () => {
       const storage1 = new OfflineStorage('dsn-1');
       const storage2 = new OfflineStorage('dsn-2');
 
-      storage1.save([createObservation('from-dsn-1')]);
-      storage2.save([createObservation('from-dsn-2')]);
+      storage1.save([createEvent('from-dsn-1')]);
+      storage2.save([createEvent('from-dsn-2')]);
 
       expect(storage1.load()[0].event_type).toBe('from-dsn-1');
       expect(storage2.load()[0].event_type).toBe('from-dsn-2');
@@ -129,14 +129,10 @@ describe('OfflineStorage', () => {
     it('should enforce max events limit (FIFO eviction)', () => {
       const storage = new OfflineStorage('test-dsn', 3);
 
-      storage.save([
-        createObservation('event-1'),
-        createObservation('event-2'),
-        createObservation('event-3'),
-      ]);
+      storage.save([createEvent('event-1'), createEvent('event-2'), createEvent('event-3')]);
 
-      // Add more observations, should evict oldest
-      storage.save([createObservation('event-4'), createObservation('event-5')]);
+      // Add more events, should evict oldest
+      storage.save([createEvent('event-4'), createEvent('event-5')]);
 
       const loaded = storage.load();
       expect(loaded).toHaveLength(3);
@@ -150,10 +146,10 @@ describe('OfflineStorage', () => {
       const storage = new OfflineStorage('test-dsn', 2);
 
       storage.save([
-        createObservation('event-1'),
-        createObservation('event-2'),
-        createObservation('event-3'),
-        createObservation('event-4'),
+        createEvent('event-1'),
+        createEvent('event-2'),
+        createEvent('event-3'),
+        createEvent('event-4'),
       ]);
 
       const loaded = storage.load();
@@ -165,14 +161,14 @@ describe('OfflineStorage', () => {
   });
 
   describe('TTL filtering', () => {
-    it('should filter expired observations on load', () => {
+    it('should filter expired events on load', () => {
       const storage = new OfflineStorage('test-dsn', 100, 1000); // 1 second TTL
 
       // Manually insert expired data
       const now = Date.now();
       const storedData = [
-        { observation: createObservation('expired'), timestamp: now - 2000 }, // 2 seconds ago
-        { observation: createObservation('valid'), timestamp: now - 500 }, // 0.5 seconds ago
+        { event: createEvent('expired'), timestamp: now - 2000 }, // 2 seconds ago
+        { event: createEvent('valid'), timestamp: now - 500 }, // 0.5 seconds ago
       ];
       mockStorage._store['flame_offline_' + hashDsnForTest('test-dsn')] =
         JSON.stringify(storedData);
@@ -182,13 +178,13 @@ describe('OfflineStorage', () => {
       expect(loaded[0].event_type).toBe('valid');
     });
 
-    it('should filter all expired observations', () => {
+    it('should filter all expired events', () => {
       const storage = new OfflineStorage('test-dsn', 100, 1000);
 
       const now = Date.now();
       const storedData = [
-        { observation: createObservation('expired-1'), timestamp: now - 2000 },
-        { observation: createObservation('expired-2'), timestamp: now - 3000 },
+        { event: createEvent('expired-1'), timestamp: now - 2000 },
+        { event: createEvent('expired-2'), timestamp: now - 3000 },
       ];
       mockStorage._store['flame_offline_' + hashDsnForTest('test-dsn')] =
         JSON.stringify(storedData);
@@ -199,10 +195,10 @@ describe('OfflineStorage', () => {
   });
 
   describe('clear', () => {
-    it('should clear all stored observations', () => {
+    it('should clear all stored events', () => {
       const storage = new OfflineStorage('test-dsn');
 
-      storage.save([createObservation('pageview')]);
+      storage.save([createEvent('pageview')]);
       expect(storage.load()).toHaveLength(1);
 
       storage.clear();
@@ -211,15 +207,15 @@ describe('OfflineStorage', () => {
   });
 
   describe('count', () => {
-    it('should return the number of stored observations', () => {
+    it('should return the number of stored events', () => {
       const storage = new OfflineStorage('test-dsn');
 
       expect(storage.count()).toBe(0);
 
-      storage.save([createObservation('pageview'), createObservation('click')]);
+      storage.save([createEvent('pageview'), createEvent('click')]);
       expect(storage.count()).toBe(2);
 
-      storage.save([createObservation('add_to_cart')]);
+      storage.save([createEvent('add_to_cart')]);
       expect(storage.count()).toBe(3);
 
       storage.clear();
@@ -241,7 +237,7 @@ describe('OfflineStorage', () => {
       });
 
       // This should not throw
-      expect(() => storage.save([createObservation('pageview')])).not.toThrow();
+      expect(() => storage.save([createEvent('pageview')])).not.toThrow();
     });
 
     it('should return empty array on corrupted JSON', () => {

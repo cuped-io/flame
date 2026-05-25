@@ -30,7 +30,7 @@ export interface CupedProviderProps extends FlameConfig {
    *
    * Defaults to the singleton exported from `@cuped-io/flame`. Override
    * mainly for tests; production apps should use the singleton so
-   * everything (auto-tracking, identity, observation queue) shares
+   * everything (auto-tracking, identity, event queue) shares
    * one instance.
    */
   flame?: Flame;

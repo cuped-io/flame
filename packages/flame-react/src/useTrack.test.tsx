@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { CupedProvider } from './provider';
-import { useObserve } from './useObserve';
+import { useTrack } from './useTrack';
 import { createStubFlame } from './test-utils';
 
-function ObserveProbe({ onReady }: { onReady: (fn: ReturnType<typeof useObserve>) => void }) {
-  const observe = useObserve();
-  onReady(observe);
+function TrackProbe({ onReady }: { onReady: (fn: ReturnType<typeof useTrack>) => void }) {
+  const track = useTrack();
+  onReady(track);
   return null;
 }
 
@@ -23,47 +23,47 @@ async function flushInit() {
   });
 }
 
-describe('useObserve', () => {
-  it('calls flame.observe with the given event and metadata', async () => {
-    const { flame, observeMock } = createStubFlame();
-    let observe: ReturnType<typeof useObserve> = () => {};
+describe('useTrack', () => {
+  it('calls flame.track with the given event and metadata', async () => {
+    const { flame, trackMock } = createStubFlame();
+    let track: ReturnType<typeof useTrack> = () => {};
 
     render(
       <CupedProvider dsn="x" flame={flame}>
-        <ObserveProbe onReady={(fn) => (observe = fn)} />
+        <TrackProbe onReady={(fn) => (track = fn)} />
       </CupedProvider>
     );
     await flushInit();
 
-    observe('signup_completed', { plan: 'pro' });
-    expect(observeMock).toHaveBeenCalledWith('signup_completed', { plan: 'pro' });
+    track('signup_completed', { plan: 'pro' });
+    expect(trackMock).toHaveBeenCalledWith('signup_completed', { plan: 'pro' });
   });
 
   it('returns a stable function across renders', async () => {
     const { flame } = createStubFlame();
-    const refs: ReturnType<typeof useObserve>[] = [];
+    const refs: ReturnType<typeof useTrack>[] = [];
 
     const { rerender } = render(
       <CupedProvider dsn="x" flame={flame}>
-        <ObserveProbe onReady={(fn) => refs.push(fn)} />
+        <TrackProbe onReady={(fn) => refs.push(fn)} />
       </CupedProvider>
     );
     await flushInit();
     rerender(
       <CupedProvider dsn="x" flame={flame}>
-        <ObserveProbe onReady={(fn) => refs.push(fn)} />
+        <TrackProbe onReady={(fn) => refs.push(fn)} />
       </CupedProvider>
     );
 
     expect(refs[0]).toBe(refs[1]);
   });
 
-  it('warns when called outside a provider and drops the observation', () => {
+  it('warns when called outside a provider and drops the event', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    let observe: ReturnType<typeof useObserve> = () => {};
+    let track: ReturnType<typeof useTrack> = () => {};
 
-    render(<ObserveProbe onReady={(fn) => (observe = fn)} />);
-    observe('event', {});
+    render(<TrackProbe onReady={(fn) => (track = fn)} />);
+    track('event', {});
 
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();

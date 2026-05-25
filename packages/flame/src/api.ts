@@ -2,10 +2,9 @@ import type {
   ActiveExperimentsResponse,
   AssignmentResponse,
   CreateAssignmentRequest,
+  CreateEventBatchRequest,
+  CreateEventRequest,
   CreateIdentityLinkRequest,
-  CreateObservationBatchRequest,
-  CreateObservationRequest,
-  ExperimentAssignment,
   IdentityLinkResponse,
   IdentityMetadata,
 } from './types';
@@ -141,39 +140,32 @@ export class ApiClient {
   }
 
   /**
-   * Track an observation using sendBeacon (fire-and-forget)
+   * Track events using sendBeacon (fire-and-forget)
    *
-   * POST /{api_key}/observations
+   * POST /{api_key}/events with the array envelope `{ events: [...] }`.
+   * A lone event is sent as an array of one — there is no separate
+   * single-event endpoint.
    *
-   * This is more reliable for tracking observations on page navigation,
-   * as the browser guarantees the request will be sent even if
-   * the page is unloaded.
+   * sendBeacon is used for reliable delivery on page navigation: the
+   * browser guarantees the request is sent even if the page unloads
+   * (e.g. checkout clicks that redirect to an external page).
    *
-   * Note: sendBeacon does not return a response, so we can't
-   * confirm if the observation was recorded. The server returns 204 No Content.
+   * Note: sendBeacon does not return a response, so we can't confirm
+   * the events were recorded. The server returns 204 No Content.
    *
-   * @param userId - User identifier
-   * @param eventType - Type of event (pageview, add_to_cart, click, etc.)
-   * @param metadata - Optional metadata for event-specific data
-   * @param experimentAssignments - Experiment assignments active at time of observation
+   * @param events - Events to send (at least one)
    * @returns true if the beacon was queued successfully, false otherwise
    */
-  trackObservationBeacon(
-    userId: string,
-    eventType: string,
-    metadata?: Record<string, unknown>,
-    experimentAssignments?: ExperimentAssignment[]
-  ): boolean {
-    const payload: CreateObservationRequest = {
-      user_id: userId,
-      event_type: eventType,
-      metadata,
-      experiment_assignments: experimentAssignments,
-    };
+  trackEventsBeacon(events: CreateEventRequest[]): boolean {
+    if (events.length === 0) {
+      return true;
+    }
 
-    const fullPath = this.buildPath('/observations');
+    const payload: CreateEventBatchRequest = { events };
+
+    const fullPath = this.buildPath('/events');
     const url = `${this.apiUrl}${fullPath}`;
-    this.log('sendBeacon observation', url, payload);
+    this.log('sendBeacon events', url, { count: events.length });
 
     // Use text/plain to avoid CORS preflight - application/json triggers preflight
     // which can fail if the page navigates away before preflight completes.
@@ -183,7 +175,7 @@ export class ApiClient {
     // Check if sendBeacon is available (it should be in modern browsers)
     if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
       const queued = navigator.sendBeacon(url, blob);
-      this.log('sendBeacon observation queued:', queued);
+      this.log('sendBeacon events queued:', queued);
       return queued;
     }
 
@@ -196,51 +188,6 @@ export class ApiClient {
       },
       body: JSON.stringify(payload),
       keepalive: true, // Helps with page navigation
-    }).catch(() => {
-      // Ignore errors - this is fire-and-forget
-    });
-
-    return true;
-  }
-
-  /**
-   * Track a batch of observations using sendBeacon (fire-and-forget)
-   *
-   * POST /{api_key}/observations/batch
-   *
-   * This is used by the observation queue to flush multiple observations
-   * in a single request, reducing network overhead.
-   *
-   * @param observations - Array of observations to send
-   * @returns true if the beacon was queued successfully, false otherwise
-   */
-  trackObservationsBatchBeacon(observations: CreateObservationRequest[]): boolean {
-    if (observations.length === 0) {
-      return true;
-    }
-
-    const payload: CreateObservationBatchRequest = { observations };
-
-    const fullPath = this.buildPath('/observations/batch');
-    const url = `${this.apiUrl}${fullPath}`;
-    this.log('sendBeacon observations batch', url, { count: observations.length });
-
-    // Use text/plain to avoid CORS preflight
-    const blob = new Blob([JSON.stringify(payload)], { type: 'text/plain' });
-
-    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      const queued = navigator.sendBeacon(url, blob);
-      this.log('sendBeacon observations batch queued:', queued);
-      return queued;
-    }
-
-    // Fallback: fire-and-forget fetch
-    this.log('sendBeacon not available, falling back to fetch');
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      keepalive: true,
     }).catch(() => {
       // Ignore errors - this is fire-and-forget
     });

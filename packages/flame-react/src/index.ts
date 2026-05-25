@@ -30,5 +30,5 @@
 export { CupedProvider, type CupedProviderProps } from './provider';
 export { useExperiment } from './useExperiment';
 export { Experiment, type ExperimentProps } from './Experiment';
-export { useObserve } from './useObserve';
+export { useTrack } from './useTrack';
 export type { UseExperimentResult, VariantsMap } from './types';

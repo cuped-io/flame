@@ -102,7 +102,9 @@ class Flame {
           this.assignments.set(experiment.id, assignment);
           this.trackingManager.registerAssignment(assignment);
 
-          this.log(`Prehydrated assignment ${assignment.variantId} for experiment ${experiment.id}`);
+          this.log(
+            `Prehydrated assignment ${assignment.variantId} for experiment ${experiment.id}`
+          );
 
           if (experiment.goals && experiment.goals.length > 0) {
             this.trackingManager.registerGoals(experiment.id, experiment.goals);
@@ -158,11 +160,11 @@ class Flame {
         this.applyAllVariants();
       }
 
-      // Start auto-tracking (includes observation-based ecommerce tracking)
+      // Start auto-tracking (includes event-based ecommerce tracking)
       this.trackingManager.startAutoTracking();
 
-      // Observe initial pageview
-      this.trackingManager.observePageview();
+      // Track initial pageview
+      this.trackingManager.trackPageview();
 
       this.initialized = true;
       this.log('Flame SDK initialized successfully');
@@ -187,42 +189,23 @@ class Flame {
   }
 
   /**
-   * Observe an event
+   * Track an event
+   *
+   * Fires one event per user action with the active experiment
+   * assignments attached for server-side goal matching. For SPA
+   * navigation call `track('pageview')` when the URL changes; for
+   * conversions call `track('conversion', …)`.
    *
    * @param eventType - Type of event (pageview, add_to_cart, conversion, etc.)
    * @param metadata - Optional metadata for event-specific data
    */
-  observe(eventType: string, metadata?: Record<string, unknown>): void {
+  track(eventType: string, metadata?: Record<string, unknown>): void {
     if (!this.trackingManager) {
       console.warn('[Flame] SDK not initialized');
       return;
     }
 
-    this.trackingManager.observe(eventType, metadata);
-  }
-
-  /**
-   * Observe a pageview
-   *
-   * Call this manually for SPA navigation when the URL changes.
-   * Automatically called on initial page load.
-   */
-  observePageview(): void {
-    if (!this.trackingManager) {
-      console.warn('[Flame] SDK not initialized');
-      return;
-    }
-
-    this.trackingManager.observePageview();
-  }
-
-  /**
-   * Observe a conversion
-   *
-   * Convenience method for observing conversion events.
-   */
-  observeConversion(metadata?: Record<string, unknown>): void {
-    this.observe('conversion', metadata);
+    this.trackingManager.track(eventType, metadata);
   }
 
   /**
@@ -446,12 +429,12 @@ export type {
   IdentityType,
   AliasType,
   ExperimentAssignment,
-  CreateObservationRequest,
-  CreateObservationBatchRequest,
-  ObservationResponse,
+  CreateEventRequest,
+  CreateEventBatchRequest,
+  EventResponse,
 } from './types';
-export { ObservationQueue, DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS } from './queue';
-export type { ObservationQueueConfig } from './queue';
+export { EventQueue, DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS } from './queue';
+export type { EventQueueConfig } from './queue';
 export type { Identity } from './identity';
 export type { UserContext, DeviceType, ViewportBucket, ConnectionType } from './context';
 export { getEcommerceGoals, getActiveEcommerceGoals } from './ecommerce';

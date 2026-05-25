@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ObservationQueue, DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS } from './queue';
-import type { CreateObservationRequest } from './types';
+import { EventQueue, DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS } from './queue';
+import type { CreateEventRequest } from './types';
 
 // Mock ApiClient
 const createMockApiClient = () => ({
-  trackObservationsBatchBeacon: vi.fn().mockReturnValue(true),
+  trackEventsBeacon: vi.fn().mockReturnValue(true),
 });
 
-// Helper to create a test observation
-const createObservation = (eventType: string): CreateObservationRequest => ({
+// Helper to create a test event
+const createEvent = (eventType: string): CreateEventRequest => ({
   user_id: 'test_user',
   event_type: eventType,
 });
@@ -33,7 +33,7 @@ const createMockLocalStorage = () => {
   };
 };
 
-describe('ObservationQueue', () => {
+describe('EventQueue', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -53,14 +53,14 @@ describe('ObservationQueue', () => {
   });
 
   describe('enqueue', () => {
-    it('should add observations to the queue', () => {
+    it('should add events to the queue', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never);
+      const queue = new EventQueue(mockApi as never);
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       expect(queue.size()).toBe(1);
 
-      queue.enqueue(createObservation('click'));
+      queue.enqueue(createEvent('click'));
       expect(queue.size()).toBe(2);
 
       queue.stop();
@@ -68,19 +68,19 @@ describe('ObservationQueue', () => {
 
     it('should flush when batch size threshold is reached', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, { batchSize: 3 });
+      const queue = new EventQueue(mockApi as never, { batchSize: 3 });
 
-      queue.enqueue(createObservation('pageview'));
-      queue.enqueue(createObservation('click'));
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      queue.enqueue(createEvent('pageview'));
+      queue.enqueue(createEvent('click'));
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
-      // Third observation should trigger flush
-      queue.enqueue(createObservation('add_to_cart'));
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledWith([
-        createObservation('pageview'),
-        createObservation('click'),
-        createObservation('add_to_cart'),
+      // Third event should trigger flush
+      queue.enqueue(createEvent('add_to_cart'));
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledWith([
+        createEvent('pageview'),
+        createEvent('click'),
+        createEvent('add_to_cart'),
       ]);
       expect(queue.size()).toBe(0);
 
@@ -89,18 +89,18 @@ describe('ObservationQueue', () => {
   });
 
   describe('flush', () => {
-    it('should send all queued observations', () => {
+    it('should send all queued events', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, { batchSize: 100 });
+      const queue = new EventQueue(mockApi as never, { batchSize: 100 });
 
-      queue.enqueue(createObservation('pageview'));
-      queue.enqueue(createObservation('click'));
+      queue.enqueue(createEvent('pageview'));
+      queue.enqueue(createEvent('click'));
       queue.flush();
 
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledWith([
-        createObservation('pageview'),
-        createObservation('click'),
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledWith([
+        createEvent('pageview'),
+        createEvent('click'),
       ]);
       expect(queue.size()).toBe(0);
 
@@ -109,10 +109,10 @@ describe('ObservationQueue', () => {
 
     it('should do nothing when queue is empty', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never);
+      const queue = new EventQueue(mockApi as never);
 
       queue.flush();
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
       queue.stop();
     });
@@ -121,17 +121,17 @@ describe('ObservationQueue', () => {
   describe('timer-based flushing', () => {
     it('should flush on interval', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         flushIntervalMs: 1000,
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      queue.enqueue(createEvent('pageview'));
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
       // Advance timer by flush interval
       vi.advanceTimersByTime(1000);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
       expect(queue.size()).toBe(0);
 
       queue.stop();
@@ -139,18 +139,18 @@ describe('ObservationQueue', () => {
 
     it('should flush multiple times on interval', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         flushIntervalMs: 1000,
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       vi.advanceTimersByTime(1000);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
 
-      queue.enqueue(createObservation('click'));
+      queue.enqueue(createEvent('click'));
       vi.advanceTimersByTime(1000);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(2);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(2);
 
       queue.stop();
     });
@@ -159,31 +159,31 @@ describe('ObservationQueue', () => {
   describe('stop', () => {
     it('should stop the timer', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         flushIntervalMs: 1000,
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.stop();
 
       // Timer should be stopped, so no flush
       vi.advanceTimersByTime(2000);
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
     });
   });
 
   describe('clear', () => {
     it('should clear the queue without flushing', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never);
+      const queue = new EventQueue(mockApi as never);
 
-      queue.enqueue(createObservation('pageview'));
-      queue.enqueue(createObservation('click'));
+      queue.enqueue(createEvent('pageview'));
+      queue.enqueue(createEvent('click'));
       queue.clear();
 
       expect(queue.size()).toBe(0);
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
       queue.stop();
     });
@@ -192,14 +192,14 @@ describe('ObservationQueue', () => {
   describe('size', () => {
     it('should return current queue size', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, { batchSize: 100 });
+      const queue = new EventQueue(mockApi as never, { batchSize: 100 });
 
       expect(queue.size()).toBe(0);
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       expect(queue.size()).toBe(1);
 
-      queue.enqueue(createObservation('click'));
+      queue.enqueue(createEvent('click'));
       expect(queue.size()).toBe(2);
 
       queue.flush();
@@ -212,38 +212,38 @@ describe('ObservationQueue', () => {
   describe('configuration', () => {
     it('should use custom batch size', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, { batchSize: 2 });
+      const queue = new EventQueue(mockApi as never, { batchSize: 2 });
 
-      queue.enqueue(createObservation('pageview'));
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      queue.enqueue(createEvent('pageview'));
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
-      queue.enqueue(createObservation('click'));
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
+      queue.enqueue(createEvent('click'));
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
 
       queue.stop();
     });
 
     it('should use custom flush interval', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         flushIntervalMs: 500,
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
 
       vi.advanceTimersByTime(499);
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(1);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
 
       queue.stop();
     });
   });
 });
 
-describe('ObservationQueue offline behavior', () => {
+describe('EventQueue offline behavior', () => {
   let mockStorage: ReturnType<typeof createMockLocalStorage>;
   let onlineHandlers: (() => void)[];
 
@@ -274,7 +274,7 @@ describe('ObservationQueue offline behavior', () => {
   describe('offline storage initialization', () => {
     it('should enable offline storage when DSN is provided', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         enableOfflineStorage: true,
       });
@@ -285,7 +285,7 @@ describe('ObservationQueue offline behavior', () => {
 
     it('should not enable offline storage without DSN', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         enableOfflineStorage: true,
       });
 
@@ -295,7 +295,7 @@ describe('ObservationQueue offline behavior', () => {
 
     it('should not enable offline storage when explicitly disabled', () => {
       const mockApi = createMockApiClient();
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         enableOfflineStorage: false,
       });
@@ -308,15 +308,15 @@ describe('ObservationQueue offline behavior', () => {
   describe('persist on flush failure', () => {
     it('should persist to offline storage when sendBeacon returns false', () => {
       const mockApi = createMockApiClient();
-      mockApi.trackObservationsBatchBeacon.mockReturnValue(false);
+      mockApi.trackEventsBeacon.mockReturnValue(false);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
-      queue.enqueue(createObservation('click'));
+      queue.enqueue(createEvent('pageview'));
+      queue.enqueue(createEvent('click'));
       queue.flush();
 
       // Should have saved to storage
@@ -331,14 +331,14 @@ describe('ObservationQueue offline behavior', () => {
 
     it('should clear queue after persisting to storage', () => {
       const mockApi = createMockApiClient();
-      mockApi.trackObservationsBatchBeacon.mockReturnValue(false);
+      mockApi.trackEventsBeacon.mockReturnValue(false);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush();
 
       // In-memory queue should be empty
@@ -351,68 +351,68 @@ describe('ObservationQueue offline behavior', () => {
   describe('retry with exponential backoff', () => {
     it('should schedule retry after flush failure', () => {
       const mockApi = createMockApiClient();
-      mockApi.trackObservationsBatchBeacon.mockReturnValue(false);
+      mockApi.trackEventsBeacon.mockReturnValue(false);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush();
 
       // Initial call + retry after ~1 second
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
 
       // Advance time to trigger retry (base delay is 1s + jitter)
       vi.advanceTimersByTime(2000);
 
       // Should have attempted retry
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(2);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(2);
 
       queue.stop();
     });
 
     it('should use exponential backoff for retries', () => {
       const mockApi = createMockApiClient();
-      mockApi.trackObservationsBatchBeacon.mockReturnValue(false);
+      mockApi.trackEventsBeacon.mockReturnValue(false);
 
       // Use a long flush interval to avoid interference from timer-based flushes
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
         flushIntervalMs: 60000, // 1 minute - won't trigger during test
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush(); // Initial flush (fails)
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
 
       // First retry at ~1s (base delay + jitter up to 1s = up to 2s)
       vi.advanceTimersByTime(2000);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(2);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(2);
 
       // Second retry at ~2s base + jitter (exponential: 2^1 * 1000 = 2000ms + up to 1s jitter)
       vi.advanceTimersByTime(3000);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(3);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(3);
 
       // Third retry at ~4s base + jitter (exponential: 2^2 * 1000 = 4000ms + up to 1s jitter)
       vi.advanceTimersByTime(6000);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(4);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(4);
 
       queue.stop();
     });
 
     it('should cap retry delay at 30 seconds', () => {
       const mockApi = createMockApiClient();
-      mockApi.trackObservationsBatchBeacon.mockReturnValue(false);
+      mockApi.trackEventsBeacon.mockReturnValue(false);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush();
 
       // Trigger many retries
@@ -421,7 +421,7 @@ describe('ObservationQueue offline behavior', () => {
       }
 
       // All retries should have happened (not stuck waiting for longer delays)
-      expect(mockApi.trackObservationsBatchBeacon.mock.calls.length).toBeGreaterThan(5);
+      expect(mockApi.trackEventsBeacon.mock.calls.length).toBeGreaterThan(5);
 
       queue.stop();
     });
@@ -431,14 +431,14 @@ describe('ObservationQueue offline behavior', () => {
     it('should flush offline storage when coming back online', () => {
       const mockApi = createMockApiClient();
       // First call fails (causing persistence), subsequent calls succeed
-      mockApi.trackObservationsBatchBeacon.mockReturnValueOnce(false).mockReturnValue(true);
+      mockApi.trackEventsBeacon.mockReturnValueOnce(false).mockReturnValue(true);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush(); // This fails and persists
 
       const storage = queue.getOfflineStorage();
@@ -448,19 +448,19 @@ describe('ObservationQueue offline behavior', () => {
       onlineHandlers.forEach((h) => h());
 
       // Should have tried to flush
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(2);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(2);
 
       queue.stop();
     });
   });
 
   describe('flush offline storage on initialization', () => {
-    it('should attempt to flush previously stored observations on start', () => {
+    it('should attempt to flush previously stored events on start', () => {
       const mockApi = createMockApiClient();
 
-      // Pre-populate storage with observations
+      // Pre-populate storage with events
       const now = Date.now();
-      const storedData = [{ observation: createObservation('previous'), timestamp: now - 1000 }];
+      const storedData = [{ event: createEvent('previous'), timestamp: now - 1000 }];
       // Calculate storage key the same way OfflineStorage does
       const dsn = 'test-dsn';
       let hash = 0;
@@ -473,16 +473,14 @@ describe('ObservationQueue offline behavior', () => {
       mockStorage._store[storageKey] = JSON.stringify(storedData);
 
       // Create queue (calls start() internally)
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      // Should have flushed the stored observation
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(1);
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledWith([
-        createObservation('previous'),
-      ]);
+      // Should have flushed the stored event
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(1);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledWith([createEvent('previous')]);
 
       queue.stop();
     });
@@ -492,14 +490,14 @@ describe('ObservationQueue offline behavior', () => {
     it('should clear offline storage after successful flush', () => {
       const mockApi = createMockApiClient();
       // First call fails, second succeeds
-      mockApi.trackObservationsBatchBeacon.mockReturnValueOnce(false).mockReturnValue(true);
+      mockApi.trackEventsBeacon.mockReturnValueOnce(false).mockReturnValue(true);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush(); // Fails and persists
 
       const storage = queue.getOfflineStorage();
@@ -517,18 +515,18 @@ describe('ObservationQueue offline behavior', () => {
     it('should reset retry attempt counter on success', () => {
       const mockApi = createMockApiClient();
       // Fail twice, then succeed
-      mockApi.trackObservationsBatchBeacon
+      mockApi.trackEventsBeacon
         .mockReturnValueOnce(false)
         .mockReturnValueOnce(false)
         .mockReturnValueOnce(true)
         .mockReturnValue(false); // For any subsequent calls
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush(); // Fails
 
       // First retry (fails)
@@ -540,13 +538,13 @@ describe('ObservationQueue offline behavior', () => {
       const storage = queue.getOfflineStorage();
       expect(storage?.count()).toBe(0);
 
-      // Add more observations and fail again
-      queue.enqueue(createObservation('new-event'));
+      // Add more events and fail again
+      queue.enqueue(createEvent('new-event'));
       queue.flush();
 
       // Next retry should start from base delay (1s), not continue exponential
       // This is verified by the fact that retry happens within 2s
-      expect(mockApi.trackObservationsBatchBeacon).toHaveBeenCalledTimes(4);
+      expect(mockApi.trackEventsBeacon).toHaveBeenCalledTimes(4);
 
       queue.stop();
     });
@@ -557,24 +555,24 @@ describe('ObservationQueue offline behavior', () => {
       vi.stubGlobal('navigator', { onLine: false, sendBeacon: vi.fn() });
 
       const mockApi = createMockApiClient();
-      mockApi.trackObservationsBatchBeacon.mockReturnValue(false);
+      mockApi.trackEventsBeacon.mockReturnValue(false);
 
-      const queue = new ObservationQueue(mockApi as never, {
+      const queue = new EventQueue(mockApi as never, {
         dsn: 'test-dsn',
         batchSize: 100,
       });
 
-      queue.enqueue(createObservation('pageview'));
+      queue.enqueue(createEvent('pageview'));
       queue.flush(); // Fails and persists
 
       // Reset call count
-      mockApi.trackObservationsBatchBeacon.mockClear();
+      mockApi.trackEventsBeacon.mockClear();
 
       // Try to flush offline storage while offline
       vi.advanceTimersByTime(2000);
 
       // Should not have attempted (navigator.onLine is false)
-      expect(mockApi.trackObservationsBatchBeacon).not.toHaveBeenCalled();
+      expect(mockApi.trackEventsBeacon).not.toHaveBeenCalled();
 
       queue.stop();
     });

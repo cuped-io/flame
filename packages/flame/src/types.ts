@@ -15,17 +15,17 @@ export interface FlameConfig {
   dsn: string;
   /** Enable debug logging */
   debug?: boolean;
-  /** Enable observation batching (default: true) */
+  /** Enable event batching (default: true) */
   enableBatching?: boolean;
-  /** Number of observations to queue before flushing (default: 10) */
+  /** Number of events to queue before flushing (default: 10) */
   batchSize?: number;
-  /** Interval in milliseconds to flush queued observations (default: 5000) */
+  /** Interval in milliseconds to flush queued events (default: 5000) */
   flushIntervalMs?: number;
-  /** Enable offline storage for failed observations (default: true when batching enabled) */
+  /** Enable offline storage for failed events (default: true when batching enabled) */
   enableOfflineStorage?: boolean;
-  /** Maximum number of observations to store offline (default: 100) */
+  /** Maximum number of events to store offline (default: 100) */
   maxOfflineEvents?: number;
-  /** Time-to-live in milliseconds for offline observations (default: 86400000 = 24 hours) */
+  /** Time-to-live in milliseconds for offline events (default: 86400000 = 24 hours) */
   offlineTtlMs?: number;
   /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
@@ -223,7 +223,7 @@ export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed';
  * - `click` / `submit` — SDK auto-tracker registers a DOM listener for
  *   the goal's `selector` and fires `goal.name` on match.
  * - `pageview` — Backend match additionally filters by `url_pattern`.
- * - `custom` — Developer-fired event (e.g. `useObserve('vote_cast')`),
+ * - `custom` — Developer-fired event (e.g. `useTrack()('vote_cast')`),
  *   no DOM auto-tracking. Use for non-DOM events like form
  *   completions, API responses, or domain actions.
  */
@@ -237,7 +237,7 @@ export type GoalType = 'click' | 'submit' | 'pageview' | 'custom';
 export interface Goal {
   /**
    * Name of the goal — also the event name used to match incoming
-   * observations. Examples: `"add_to_cart"`, `"vote_cast"`,
+   * events. Examples: `"add_to_cart"`, `"vote_cast"`,
    * `"signup_completed"`. For pageview goals this is just a label;
    * the SDK fires the literal `"pageview"` event for matching.
    */
@@ -245,7 +245,7 @@ export interface Goal {
   /**
    * CSS selector for the SDK auto-tracker on `click`/`submit` goals.
    * Optional — when missing, the goal is dev-fired by calling
-   * `flame.observe(goal.name)` from your code instead of being
+   * `flame.track(goal.name)` from your code instead of being
    * auto-tracked from a DOM event. The backend matcher never reads
    * this field.
    */
@@ -349,34 +349,6 @@ export interface StoredAssignment {
 }
 
 /**
- * Request body for creating an event (matches the cuped API)
- */
-export interface CreateEventRequest {
-  /** Pseudonymous user identifier */
-  user_id: string;
-  /** Experiment ID */
-  experiment_id: string;
-  /** Variant ID */
-  variant_id: string;
-  /** Type of event (click, conversion, purchase, etc.) */
-  event_type: string;
-  /** Optional metadata */
-  metadata?: Record<string, unknown>;
-  /** Optional client timestamp */
-  timestamp?: string;
-}
-
-/**
- * Response from the events endpoint (matches the cuped API)
- */
-export interface EventResponse {
-  /** Event ID */
-  event_id: string;
-  /** Server timestamp when event was recorded */
-  recorded_at: string;
-}
-
-/**
  * Alias type for identity linking
  */
 export type AliasType = 'device' | 'session';
@@ -406,7 +378,7 @@ export interface IdentityLinkResponse {
 }
 
 /**
- * An experiment assignment included with an observation
+ * An experiment assignment included with an event
  */
 export interface ExperimentAssignment {
   /** Experiment ID */
@@ -416,38 +388,41 @@ export interface ExperimentAssignment {
 }
 
 /**
- * Request body for creating an observation (matches the cuped API)
+ * Request body for creating an event (matches the cuped API)
  *
- * Observations are the new single-event architecture:
- * - Fire ONE observation per user action, regardless of experiment count
+ * Events are the single-event architecture:
+ * - Fire ONE event per user action, regardless of experiment count
  * - Include experiment assignments for server-side goal derivation
  * - Goals are matched server-side during ingestion
  */
-export interface CreateObservationRequest {
+export interface CreateEventRequest {
   /** User identifier */
   user_id: string;
   /** Type of event (pageview, add_to_cart, click, etc.) */
   event_type: string;
   /** Optional metadata for event-specific data */
   metadata?: Record<string, unknown>;
-  /** Experiment assignments active at time of observation */
+  /** Experiment assignments active at time of event */
   experiment_assignments?: ExperimentAssignment[];
 }
 
 /**
- * Response from the observations endpoint (matches the cuped API)
+ * Response from the events endpoint (matches the cuped API)
  */
-export interface ObservationResponse {
-  /** Observation ID */
-  observation_id: string;
-  /** Server timestamp when observation was recorded */
+export interface EventResponse {
+  /** Event ID */
+  event_id: string;
+  /** Server timestamp when the event was recorded */
   recorded_at: string;
 }
 
 /**
- * Request body for creating observations in batch (matches the cuped API)
+ * Request body for the `/events` ingest endpoint (matches the cuped API).
+ *
+ * The SDK always POSTs this array envelope to `POST /{api_key}/events`,
+ * even for a single event (an array of one).
  */
-export interface CreateObservationBatchRequest {
-  /** List of observations to create */
-  observations: CreateObservationRequest[];
+export interface CreateEventBatchRequest {
+  /** List of events to create */
+  events: CreateEventRequest[];
 }

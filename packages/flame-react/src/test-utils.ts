@@ -4,21 +4,23 @@ import type { Flame, Variant } from '@cuped-io/flame';
 /**
  * Build a stub flame instance that satisfies the surface used by
  * the React provider/hooks (init, isInitialized, getAssignedVariantInfo,
- * observe). Does not mock the rest of the SDK.
+ * track). Does not mock the rest of the SDK.
  */
-export function createStubFlame(opts: {
-  /**
-   * Variants to "assign" — keyed by experiment id. The hook returns
-   * these via `getAssignedVariantInfo`.
-   */
-  assignments?: Record<string, Variant>;
-  /**
-   * If true, init() resolves immediately. Otherwise returns a
-   * promise the caller can resolve manually via the returned
-   * `resolveInit` handle (for testing the loading state).
-   */
-  autoInit?: boolean;
-} = {}): { flame: Flame; resolveInit: () => void; observeMock: ReturnType<typeof vi.fn> } {
+export function createStubFlame(
+  opts: {
+    /**
+     * Variants to "assign" — keyed by experiment id. The hook returns
+     * these via `getAssignedVariantInfo`.
+     */
+    assignments?: Record<string, Variant>;
+    /**
+     * If true, init() resolves immediately. Otherwise returns a
+     * promise the caller can resolve manually via the returned
+     * `resolveInit` handle (for testing the loading state).
+     */
+    autoInit?: boolean;
+  } = {}
+): { flame: Flame; resolveInit: () => void; trackMock: ReturnType<typeof vi.fn> } {
   const { assignments = {}, autoInit = true } = opts;
   let initialized = false;
   let resolveInit: () => void = () => {};
@@ -32,7 +34,7 @@ export function createStubFlame(opts: {
         };
       });
 
-  const observeMock = vi.fn();
+  const trackMock = vi.fn();
 
   const stub = {
     isInitialized: () => initialized,
@@ -46,7 +48,7 @@ export function createStubFlame(opts: {
     getAssignedVariantInfo: (experimentId: string): Variant | null => {
       return assignments[experimentId] ?? null;
     },
-    observe: observeMock,
+    track: trackMock,
   } as unknown as Flame;
 
   return {
@@ -55,7 +57,7 @@ export function createStubFlame(opts: {
       initialized = true;
       resolveInit();
     },
-    observeMock,
+    trackMock,
   };
 }
 

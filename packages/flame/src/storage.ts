@@ -1,4 +1,4 @@
-import type { CreateObservationRequest } from './types';
+import type { CreateEventRequest } from './types';
 
 /**
  * Default maximum number of events to store offline
@@ -11,15 +11,15 @@ export const DEFAULT_MAX_OFFLINE_EVENTS = 100;
 export const DEFAULT_OFFLINE_TTL_MS = 86400000;
 
 /**
- * Storage key prefix for offline observations
+ * Storage key prefix for offline events
  */
 const STORAGE_KEY_PREFIX = 'flame_offline_';
 
 /**
- * Stored observation with timestamp for TTL filtering
+ * Stored event with timestamp for TTL filtering
  */
-export interface StoredObservation {
-  observation: CreateObservationRequest;
+export interface StoredEvent {
+  event: CreateEventRequest;
   timestamp: number;
 }
 
@@ -37,7 +37,7 @@ function hashDsn(dsn: string): string {
 }
 
 /**
- * Offline storage for observations when network requests fail
+ * Offline storage for events when network requests fail
  *
  * Features:
  * - Storage key namespaced by DSN hash to avoid collisions
@@ -75,24 +75,24 @@ export class OfflineStorage {
   }
 
   /**
-   * Save observations to localStorage
+   * Save events to localStorage
    *
-   * New observations are appended to existing ones.
+   * New events are appended to existing ones.
    * If the total exceeds maxEvents, oldest events are discarded (FIFO).
    */
-  save(observations: CreateObservationRequest[]): void {
-    if (!this.isAvailable() || observations.length === 0) {
+  save(events: CreateEventRequest[]): void {
+    if (!this.isAvailable() || events.length === 0) {
       return;
     }
 
     try {
       const now = Date.now();
-      const newStored: StoredObservation[] = observations.map((observation) => ({
-        observation,
+      const newStored: StoredEvent[] = events.map((event) => ({
+        event,
         timestamp: now,
       }));
 
-      // Load existing observations (already filters expired)
+      // Load existing events (already filters expired)
       const existingStored = this.loadStored();
 
       // Combine existing and new
@@ -108,18 +108,18 @@ export class OfflineStorage {
   }
 
   /**
-   * Load observations from localStorage
+   * Load events from localStorage
    *
-   * Filters out expired observations based on TTL.
+   * Filters out expired events based on TTL.
    */
-  load(): CreateObservationRequest[] {
-    return this.loadStored().map((stored) => stored.observation);
+  load(): CreateEventRequest[] {
+    return this.loadStored().map((stored) => stored.event);
   }
 
   /**
-   * Load stored observations with timestamps (for internal use)
+   * Load stored events with timestamps (for internal use)
    */
-  private loadStored(): StoredObservation[] {
+  private loadStored(): StoredEvent[] {
     if (!this.isAvailable()) {
       return [];
     }
@@ -130,10 +130,10 @@ export class OfflineStorage {
         return [];
       }
 
-      const stored: StoredObservation[] = JSON.parse(raw);
+      const stored: StoredEvent[] = JSON.parse(raw);
       const now = Date.now();
 
-      // Filter expired observations
+      // Filter expired events
       return stored.filter((item) => now - item.timestamp < this.ttlMs);
     } catch {
       return [];
@@ -141,7 +141,7 @@ export class OfflineStorage {
   }
 
   /**
-   * Clear all stored observations
+   * Clear all stored events
    */
   clear(): void {
     if (!this.isAvailable()) {
@@ -156,7 +156,7 @@ export class OfflineStorage {
   }
 
   /**
-   * Get the number of stored observations
+   * Get the number of stored events
    */
   count(): number {
     return this.loadStored().length;

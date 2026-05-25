@@ -2,7 +2,7 @@ import { useCallback, useContext } from 'react';
 import { CupedContext } from './context';
 
 /**
- * Returns a stable function that records an observation.
+ * Returns a stable function that records an event.
  *
  * The event name you pass here is what the backend uses to match
  * against goals — define a matching goal once at the project level
@@ -11,12 +11,12 @@ import { CupedContext } from './context';
  *
  * ```tsx
  * function VoteButton({ gameId, option }: Props) {
- *   const observe = useObserve();
+ *   const track = useTrack();
  *   return (
  *     <button
  *       onClick={() => {
  *         castVote(option);
- *         observe('vote_cast', { game_id: gameId, option });
+ *         track('vote_cast', { game_id: gameId, option });
  *       }}
  *     >
  *       Vote
@@ -30,18 +30,18 @@ import { CupedContext } from './context';
  * cause spurious re-runs.
  *
  * If the SDK isn't initialized yet, the call is buffered into
- * flame's observation queue once init completes.
+ * flame's event queue once init completes.
  */
-export function useObserve(): (eventType: string, metadata?: Record<string, unknown>) => void {
+export function useTrack(): (eventType: string, metadata?: Record<string, unknown>) => void {
   const { flame } = useContext(CupedContext);
 
   return useCallback(
     (eventType: string, metadata?: Record<string, unknown>) => {
       if (!flame) {
-        console.warn('[CupedProvider] useObserve called outside provider; observation dropped');
+        console.warn('[CupedProvider] useTrack called outside provider; event dropped');
         return;
       }
-      flame.observe(eventType, metadata);
+      flame.track(eventType, metadata);
     },
     [flame]
   );

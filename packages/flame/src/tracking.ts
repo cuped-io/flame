@@ -1,11 +1,6 @@
-import type {
-  StoredAssignment,
-  Goal,
-  ExperimentAssignment,
-  CreateObservationRequest,
-} from './types';
+import type { StoredAssignment, Goal, ExperimentAssignment, CreateEventRequest } from './types';
 import type { ApiClient } from './api';
-import { ObservationQueue, type ObservationQueueConfig } from './queue';
+import { EventQueue, type EventQueueConfig } from './queue';
 
 /**
  * Registered goal for auto-detection
@@ -20,11 +15,11 @@ interface RegisteredGoal {
 export interface TrackingManagerConfig {
   /** Enable debug logging */
   debug?: boolean;
-  /** Enable observation batching (default: true) */
+  /** Enable event batching (default: true) */
   enableBatching?: boolean;
-  /** Number of observations to queue before flushing (default: 10) */
+  /** Number of events to queue before flushing (default: 10) */
   batchSize?: number;
-  /** Interval in milliseconds to flush queued observations (default: 5000) */
+  /** Interval in milliseconds to flush queued events (default: 5000) */
   flushIntervalMs?: number;
   /** DSN for storage namespacing (required for offline storage) */
   dsn?: string;
@@ -37,18 +32,18 @@ export interface TrackingManagerConfig {
 }
 
 /**
- * Tracking manager for observation-based event tracking
+ * Tracking manager for event tracking
  *
  * Uses sendBeacon for reliable event delivery, ensuring events are sent
  * even when the page is navigating away (e.g., checkout clicks that redirect
  * to external checkout pages).
  *
- * All tracking uses the observation model:
+ * All tracking uses the single-event model:
  * - Single event per user action (not per experiment)
  * - Experiment assignments included for server-side goal matching
  * - Goals matched server-side during ingestion
  *
- * When batching is enabled (default), observations are queued and sent in batches
+ * When batching is enabled (default), events are queued and sent in batches
  * for improved efficiency.
  */
 export class TrackingManager {
@@ -59,7 +54,7 @@ export class TrackingManager {
   private clickHandler: ((event: MouseEvent) => void) | null = null;
   private submitHandler: ((event: SubmitEvent) => void) | null = null;
   private registeredGoals: RegisteredGoal[] = [];
-  private queue: ObservationQueue | null = null;
+  private queue: EventQueue | null = null;
   private enableBatching: boolean;
 
   constructor(apiClient: ApiClient, userId: string, config: TrackingManagerConfig = {}) {
@@ -69,9 +64,9 @@ export class TrackingManager {
     this.debug = config.debug ?? false;
     this.enableBatching = config.enableBatching ?? true;
 
-    // Initialize observation queue if batching is enabled
+    // Initialize event queue if batching is enabled
     if (this.enableBatching) {
-      const queueConfig: ObservationQueueConfig = {
+      const queueConfig: EventQueueConfig = {
         batchSize: config.batchSize,
         flushIntervalMs: config.flushIntervalMs,
         debug: this.debug,
@@ -80,7 +75,7 @@ export class TrackingManager {
         maxOfflineEvents: config.maxOfflineEvents,
         offlineTtlMs: config.offlineTtlMs,
       };
-      this.queue = new ObservationQueue(apiClient, queueConfig);
+      this.queue = new EventQueue(apiClient, queueConfig);
     }
   }
 
@@ -98,10 +93,10 @@ export class TrackingManager {
    * clicks/submits a matching element.
    *
    * `pageview` and `custom` goals are intentionally skipped:
-   * - `pageview` is fired by `observePageview()` (called from `init`
+   * - `pageview` is fired by `trackPageview()` (called from `init`
    *   and on SPA navigation).
    * - `custom` is fired manually by the developer via
-   *   `flame.observe(goal.name)` / `useObserve()` — there's no DOM
+   *   `flame.track(goal.name)` / `useTrack()` — there's no DOM
    *   event to listen to.
    */
   registerGoals(_experimentId: string, goals: Goal[]): void {
@@ -171,7 +166,7 @@ export class TrackingManager {
       this.submitHandler = null;
     }
 
-    // Stop the queue (flushes remaining observations)
+    // Stop the queue (flushes remaining events)
     if (this.queue) {
       this.queue.flush();
       this.queue.stop();
@@ -200,7 +195,7 @@ export class TrackingManager {
     if (modifiedElement) {
       const selector = modifiedElement.getAttribute('data-flame-selector');
       if (selector) {
-        this.observe('click', { selector, variant_click: true });
+        this.track('click', { selector, variant_click: true });
       }
     }
 
@@ -219,7 +214,7 @@ export class TrackingManager {
   }
 
   /**
-   * Check if an element matches any registered goals and fire observations
+   * Check if an element matches any registered goals and fire events
    */
   private checkGoalMatch(element: Element, eventType: 'click' | 'submit'): void {
     if (this.debug) {
@@ -237,7 +232,7 @@ export class TrackingManager {
       // A submit goal with no selector matches any form submit — the
       // no-code "track any form on the page" case. A click goal with no
       // selector has no target to bind to (every click would fire it),
-      // so it's only observable manually via flame.observe(); skip it.
+      // so it's only trackable manually via flame.track(); skip it.
       let matches: boolean;
       if (goal.selector) {
         matches = this.elementMatchesGoal(element, goal.selector);
@@ -250,7 +245,7 @@ export class TrackingManager {
       }
 
       if (matches && !fired.has(goal.name)) {
-        this.observe(goal.name, {
+        this.track(goal.name, {
           selector: goal.selector,
           event_type: goal.type,
         });
@@ -290,11 +285,11 @@ export class TrackingManager {
   }
 
   // ============================================================================
-  // Observation API
+  // Event API
   // ============================================================================
 
   /**
-   * Get current experiment assignments for inclusion in observations
+   * Get current experiment assignments for inclusion in events
    */
   getExperimentAssignments(): ExperimentAssignment[] {
     const assignments: ExperimentAssignment[] = [];
@@ -308,18 +303,19 @@ export class TrackingManager {
   }
 
   /**
-   * Observe an event
+   * Track an event
    *
-   * Observations are project-scoped events that:
+   * Events are project-scoped and:
    * - Fire ONCE per user action, regardless of experiment count
    * - Include experiment assignments for server-side goal derivation
    * - Goals are matched server-side during ingestion
    * - Automatically enriched with page context (url, path, title, referrer)
    *
-   * When batching is enabled, observations are queued and sent in batches.
-   * When batching is disabled, observations are sent immediately via sendBeacon.
+   * When batching is enabled, events are queued and sent in batches.
+   * When batching is disabled, the event is sent immediately via
+   * sendBeacon as a one-element `{ events: [...] }` array.
    */
-  observe(eventType: string, metadata?: Record<string, unknown>): void {
+  track(eventType: string, metadata?: Record<string, unknown>): void {
     const experimentAssignments = this.getExperimentAssignments();
 
     // Auto-enrich with page context (user metadata takes precedence)
@@ -332,7 +328,7 @@ export class TrackingManager {
     };
 
     if (this.debug) {
-      console.log('[Flame] Observing:', {
+      console.log('[Flame] Tracking:', {
         eventType,
         metadata: enrichedMetadata,
         experimentAssignments: experimentAssignments.length,
@@ -340,7 +336,7 @@ export class TrackingManager {
       });
     }
 
-    const observation: CreateObservationRequest = {
+    const event: CreateEventRequest = {
       user_id: this.userId,
       event_type: eventType,
       metadata: enrichedMetadata,
@@ -348,23 +344,18 @@ export class TrackingManager {
     };
 
     if (this.queue) {
-      // Batching enabled: enqueue the observation
-      this.queue.enqueue(observation);
+      // Batching enabled: enqueue the event
+      this.queue.enqueue(event);
     } else {
-      // Batching disabled: send immediately
-      this.apiClient.trackObservationBeacon(
-        this.userId,
-        eventType,
-        enrichedMetadata,
-        experimentAssignments
-      );
+      // Batching disabled: send immediately as an array of one
+      this.apiClient.trackEventsBeacon([event]);
     }
   }
 
   /**
-   * Flush any queued observations immediately
+   * Flush any queued events immediately
    *
-   * Call this when you need to ensure observations are sent right away,
+   * Call this when you need to ensure events are sent right away,
    * e.g., before a critical navigation.
    */
   flush(): void {
@@ -374,9 +365,9 @@ export class TrackingManager {
   }
 
   /**
-   * Observe a pageview
+   * Track a pageview
    */
-  observePageview(): void {
-    this.observe('pageview');
+  trackPageview(): void {
+    this.track('pageview');
   }
 }

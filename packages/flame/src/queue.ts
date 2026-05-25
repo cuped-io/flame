@@ -1,14 +1,14 @@
-import type { CreateObservationRequest } from './types';
+import type { CreateEventRequest } from './types';
 import type { ApiClient } from './api';
 import { OfflineStorage, DEFAULT_MAX_OFFLINE_EVENTS, DEFAULT_OFFLINE_TTL_MS } from './storage';
 
 /**
- * Default batch size (number of observations before auto-flush). 50
+ * Default batch size (number of events before auto-flush). 50
  * matches the Mixpanel / Statsig industry-typical default — large
  * enough to amortize per-request server cost ~5× over the previous
  * value of 10, small enough to fit comfortably under sendBeacon's
- * ~64 KB browser limit at typical observation sizes
- * (~200-700 bytes/obs → 10-35 KB at batch=50).
+ * ~64 KB browser limit at typical event sizes
+ * (~200-700 bytes/event → 10-35 KB at batch=50).
  */
 export const DEFAULT_BATCH_SIZE = 50;
 
@@ -28,12 +28,12 @@ const MAX_RETRY_DELAY_MS = 30000;
 const BASE_RETRY_DELAY_MS = 1000;
 
 /**
- * Configuration for the observation queue
+ * Configuration for the event queue
  */
-export interface ObservationQueueConfig {
-  /** Number of observations to queue before flushing (default: 50) */
+export interface EventQueueConfig {
+  /** Number of events to queue before flushing (default: 50) */
   batchSize?: number;
-  /** Interval in milliseconds to flush queued observations (default: 5000) */
+  /** Interval in milliseconds to flush queued events (default: 5000) */
   flushIntervalMs?: number;
   /** Enable debug logging */
   debug?: boolean;
@@ -48,21 +48,21 @@ export interface ObservationQueueConfig {
 }
 
 /**
- * Observation queue that batches observations and flushes them periodically
+ * Event queue that batches events and flushes them periodically
  *
- * Observations are queued and flushed:
+ * Events are queued and flushed:
  * - When batch size threshold is reached
  * - When flush interval timer fires
  * - When page is unloading (guaranteed delivery via sendBeacon)
  *
  * Offline resilience:
- * - Failed observations are persisted to localStorage
+ * - Failed events are persisted to localStorage
  * - Automatic retry with exponential backoff
- * - Flushes persisted observations when coming back online
+ * - Flushes persisted events when coming back online
  */
-export class ObservationQueue {
+export class EventQueue {
   private apiClient: ApiClient;
-  private queue: CreateObservationRequest[] = [];
+  private queue: CreateEventRequest[] = [];
   private batchSize: number;
   private flushIntervalMs: number;
   private debug: boolean;
@@ -73,7 +73,7 @@ export class ObservationQueue {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private onlineHandler: (() => void) | null = null;
 
-  constructor(apiClient: ApiClient, config: ObservationQueueConfig = {}) {
+  constructor(apiClient: ApiClient, config: EventQueueConfig = {}) {
     this.apiClient = apiClient;
     this.batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
     this.flushIntervalMs = config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
@@ -136,7 +136,7 @@ export class ObservationQueue {
       window.addEventListener('online', this.onlineHandler);
     }
 
-    // Attempt to flush any previously persisted observations
+    // Attempt to flush any previously persisted events
     this.flushOfflineStorage();
   }
 
@@ -168,14 +168,14 @@ export class ObservationQueue {
   }
 
   /**
-   * Add an observation to the queue
+   * Add an event to the queue
    *
    * If the queue reaches the batch size threshold, it will be flushed immediately.
    */
-  enqueue(observation: CreateObservationRequest): void {
-    this.queue.push(observation);
-    this.log('Enqueued observation', {
-      eventType: observation.event_type,
+  enqueue(event: CreateEventRequest): void {
+    this.queue.push(event);
+    this.log('Enqueued event', {
+      eventType: event.event_type,
       queueSize: this.queue.length,
     });
 
@@ -187,22 +187,22 @@ export class ObservationQueue {
   }
 
   /**
-   * Flush all queued observations
+   * Flush all queued events
    *
    * Uses sendBeacon for reliable delivery, especially during page unload.
-   * If sendBeacon fails, observations are persisted to offline storage.
+   * If sendBeacon fails, events are persisted to offline storage.
    */
   flush(): void {
     if (this.queue.length === 0) {
-      // Also try to flush any persisted observations
+      // Also try to flush any persisted events
       this.flushOfflineStorage();
       return;
     }
 
-    const observations = [...this.queue]; // Copy, don't clear yet
+    const events = [...this.queue]; // Copy, don't clear yet
 
-    this.log('Flushing observations', { count: observations.length });
-    const success = this.apiClient.trackObservationsBatchBeacon(observations);
+    this.log('Flushing events', { count: events.length });
+    const success = this.apiClient.trackEventsBeacon(events);
 
     if (success) {
       this.queue = []; // Clear only on success
@@ -210,7 +210,7 @@ export class ObservationQueue {
     } else {
       // Persist for retry
       this.log('Flush failed, persisting to offline storage');
-      this.offlineStorage?.save(observations);
+      this.offlineStorage?.save(events);
       this.queue = []; // Clear in-memory queue after persisting
       this.scheduleRetry();
     }
@@ -239,7 +239,7 @@ export class ObservationQueue {
   }
 
   /**
-   * Flush observations from offline storage
+   * Flush events from offline storage
    */
   private flushOfflineStorage(): void {
     if (!this.offlineStorage) {
@@ -259,7 +259,7 @@ export class ObservationQueue {
     }
 
     this.log('Flushing offline storage', { count: stored.length });
-    const success = this.apiClient.trackObservationsBatchBeacon(stored);
+    const success = this.apiClient.trackEventsBeacon(stored);
 
     if (success) {
       this.offlineStorage.clear();

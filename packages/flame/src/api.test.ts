@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { ApiClient } from './api';
 
+// jsdom's Blob has no .text(); read it via FileReader instead.
+function readBlob(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
+
 describe('ApiClient', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -228,8 +238,8 @@ describe('ApiClient', () => {
     });
   });
 
-  describe('trackObservationBeacon', () => {
-    it('should send observation using sendBeacon', () => {
+  describe('trackEventsBeacon', () => {
+    it('should send events to /events using sendBeacon', () => {
       const sendBeaconMock = vi.fn().mockReturnValue(true);
       Object.defineProperty(navigator, 'sendBeacon', {
         value: sendBeaconMock,
@@ -238,17 +248,21 @@ describe('ApiClient', () => {
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const result = client.trackObservationBeacon('user-123', 'pageview');
+      const result = client.trackEventsBeacon([{ user_id: 'user-123', event_type: 'pageview' }]);
 
       expect(result).toBe(true);
       expect(sendBeaconMock).toHaveBeenCalledWith(
-        'https://api.cuped.io/pk_live_abc123/observations',
+        'https://api.cuped.io/pk_live_abc123/events',
         expect.any(Blob)
       );
     });
 
-    it('should include metadata in beacon payload', () => {
-      const sendBeaconMock = vi.fn().mockReturnValue(true);
+    it('should POST the { events: [...] } array envelope', async () => {
+      let capturedBlob: Blob | undefined;
+      const sendBeaconMock = vi.fn((_url: string, blob: Blob) => {
+        capturedBlob = blob;
+        return true;
+      });
       Object.defineProperty(navigator, 'sendBeacon', {
         value: sendBeaconMock,
         writable: true,
@@ -256,17 +270,23 @@ describe('ApiClient', () => {
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const metadata = { path: '/product/123', value: 49.99 };
-      client.trackObservationBeacon('user-123', 'add_to_cart', metadata);
+      const events = [
+        { user_id: 'user-123', event_type: 'add_to_cart', metadata: { value: 49.99 } },
+        { user_id: 'user-123', event_type: 'pageview' },
+      ];
+      client.trackEventsBeacon(events);
 
-      expect(sendBeaconMock).toHaveBeenCalled();
-      // Verify the Blob contains correct data
-      const blobArg = sendBeaconMock.mock.calls[0][1] as Blob;
-      expect(blobArg.type).toBe('text/plain');
+      expect(capturedBlob?.type).toBe('text/plain');
+      const body = JSON.parse(await readBlob(capturedBlob!));
+      expect(body).toEqual({ events });
     });
 
-    it('should include experiment assignments in beacon payload', () => {
-      const sendBeaconMock = vi.fn().mockReturnValue(true);
+    it('should wrap a single event as an array of one', async () => {
+      let capturedBlob: Blob | undefined;
+      const sendBeaconMock = vi.fn((_url: string, blob: Blob) => {
+        capturedBlob = blob;
+        return true;
+      });
       Object.defineProperty(navigator, 'sendBeacon', {
         value: sendBeaconMock,
         writable: true,
@@ -275,9 +295,28 @@ describe('ApiClient', () => {
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
       const assignments = [{ experiment_id: 'exp-1', variant_id: 'variant-1' }];
-      client.trackObservationBeacon('user-123', 'purchase', { order_id: '123' }, assignments);
+      client.trackEventsBeacon([
+        { user_id: 'user-123', event_type: 'purchase', experiment_assignments: assignments },
+      ]);
 
-      expect(sendBeaconMock).toHaveBeenCalled();
+      const body = JSON.parse(await readBlob(capturedBlob!));
+      expect(body.events).toHaveLength(1);
+      expect(body.events[0].experiment_assignments).toEqual(assignments);
+    });
+
+    it('should not send when given an empty array', () => {
+      const sendBeaconMock = vi.fn().mockReturnValue(true);
+      Object.defineProperty(navigator, 'sendBeacon', {
+        value: sendBeaconMock,
+        writable: true,
+        configurable: true,
+      });
+
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+      const result = client.trackEventsBeacon([]);
+
+      expect(result).toBe(true);
+      expect(sendBeaconMock).not.toHaveBeenCalled();
     });
 
     it('should fall back to fetch when sendBeacon is not available', () => {
@@ -290,11 +329,11 @@ describe('ApiClient', () => {
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const result = client.trackObservationBeacon('user-123', 'pageview');
+      const result = client.trackEventsBeacon([{ user_id: 'user-123', event_type: 'pageview' }]);
 
       expect(result).toBe(true);
       expect(fetchMock).toHaveBeenCalledWith(
-        'https://api.cuped.io/pk_live_abc123/observations',
+        'https://api.cuped.io/pk_live_abc123/events',
         expect.objectContaining({
           method: 'POST',
           keepalive: true,
@@ -311,7 +350,7 @@ describe('ApiClient', () => {
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const result = client.trackObservationBeacon('user-123', 'pageview');
+      const result = client.trackEventsBeacon([{ user_id: 'user-123', event_type: 'pageview' }]);
 
       expect(result).toBe(false);
     });
