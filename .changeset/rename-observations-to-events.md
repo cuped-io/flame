@@ -1,6 +1,6 @@
 ---
-'@cuped-io/flame': major
-'@cuped-io/flame-react': major
+'@cuped-io/flame': minor
+'@cuped-io/flame-react': minor
 ---
 
 Rename observations to events and consolidate ingest on a single `/events` endpoint.
