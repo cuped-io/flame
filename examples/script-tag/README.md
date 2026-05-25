@@ -62,8 +62,9 @@ visit.
 3. **The target element changes** match the configured variant change.
 4. **Identity is persistent.** "Show identity" button dumps the
    device id; reload → same id.
-5. **Observations fire.** "Fire observation" button → Network shows
-   `POST /:dsn/observations` (or buffered + flushed via batch).
+5. **Events fire.** "Fire event" button → Network shows
+   `POST /:dsn/events` with the `{ events: [...] }` envelope (a single
+   event is an array of one; batched sends carry several).
 
 ## Real-world testing on a production site
 
@@ -75,7 +76,7 @@ steps on a production target:
    inert element (e.g. a footer link's text or class). Avoid change
    types that could affect a critical user flow on first try.
 2. Load the site and verify the change applied.
-3. Watch the Network tab for observations on the existing
+3. Watch the Network tab for events on the existing
    e-commerce auto-detection (add_to_cart, checkout, etc.) — these
    should still fire as before.
 4. Roll the experiment back when you're done.

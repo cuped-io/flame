@@ -143,10 +143,10 @@
       <p>
         After loading: open DevTools → Console for the <code>[Flame]</code> debug logs (if
         <code>data-debug="true"</code> is set on the script tag), and Network for the API calls
-        (<code>/experiments/active</code>, <code>/assign</code>, <code>/observations</code>).
+        (<code>/experiments/active</code>, <code>/assign</code>, <code>/events</code>).
       </p>
-      <button onclick="window.flame && window.flame.observe('demo_button_clicked', { source: 'script-tag-example' })">
-        Fire observation
+      <button onclick="window.flame && window.flame.track('demo_button_clicked', { source: 'script-tag-example' })">
+        Fire event
       </button>
       <button onclick="document.getElementById('debug').textContent = JSON.stringify(window.flame?.getIdentity?.(), null, 2)">
         Show identity

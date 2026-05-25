@@ -5,7 +5,7 @@
 
 React bindings for the [cuped.io](https://cuped.io) A/B testing SDK.
 
-Provides `<CupedProvider>`, `useExperiment`, `<Experiment>`, and `useObserve` so you can branch React components on variant assignment without touching the DOM directly.
+Provides `<CupedProvider>`, `useExperiment`, `<Experiment>`, and `useTrack` so you can branch React components on variant assignment without touching the DOM directly.
 
 ## Install
 
@@ -20,7 +20,7 @@ You'll need a DSN â€” get one at [cuped.io](https://cuped.io) under **Settings â
 ## Usage (CSR / Vite / CRA)
 
 ```tsx
-import { CupedProvider, useExperiment, Experiment, useObserve } from '@cuped-io/flame-react';
+import { CupedProvider, useExperiment, Experiment, useTrack } from '@cuped-io/flame-react';
 
 function App() {
   return (
@@ -55,12 +55,12 @@ function Hero2() {
 // any experiment in the project can then attach the goal as primary
 // or secondary.
 function VoteButton({ gameId, option }: { gameId: string; option: string }) {
-  const observe = useObserve();
+  const track = useTrack();
   return (
     <button
       onClick={() => {
         castVote(option);
-        observe('vote_cast', { game_id: gameId, option });
+        track('vote_cast', { game_id: gameId, option });
       }}
     >
       Vote

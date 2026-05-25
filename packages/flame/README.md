@@ -30,7 +30,7 @@ You'll need a DSN — get one at [cuped.io](https://cuped.io) under **Settings �
 ></script>
 ```
 
-The SDK auto-initializes from the `data-dsn` attribute, fetches active experiments, applies variant DOM changes, and tracks observations. Define the changes per variant in the cuped.io dashboard.
+The SDK auto-initializes from the `data-dsn` attribute, fetches active experiments, applies variant DOM changes, and tracks events. Define the changes per variant in the cuped.io dashboard.
 
 ### Programmatic
 
@@ -46,8 +46,11 @@ if (flame.isInVariant('hero-cta', 'treatment')) {
 // Fire any custom event. Define a matching goal once at the project
 // level on cuped.io (Project → Goals → Custom event); any experiment
 // in the project can then attach it as primary or secondary.
-flame.observe('vote_cast', { game_id: 'g42', option: 'controller' });
+flame.track('vote_cast', { game_id: 'g42', option: 'controller' });
 ```
+
+The SDK POSTs every event to `POST /{api_key}/events` as the array
+envelope `{ "events": [ … ] }` (a single event is an array of one).
 
 ## Public API
 
@@ -55,10 +58,9 @@ flame.observe('vote_cast', { game_id: 'g42', option: 'controller' });
 // Lifecycle
 flame.init({ dsn, prehydrated? })
 
-// Observations
-flame.observe(eventType, metadata?)
-flame.observePageview()
-flame.observeConversion(metadata?)
+// Events — one verb. Use track('pageview') on SPA navigation and
+// track('conversion', …) for conversions.
+flame.track(eventType, metadata?)
 
 // Identity
 flame.identify(userId)

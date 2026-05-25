@@ -1,6 +1,6 @@
 'use client';
 
-import { useExperiment, Experiment, useObserve } from '@cuped-io/flame-react';
+import { useExperiment, Experiment, useTrack } from '@cuped-io/flame-react';
 
 const EXPERIMENT_ID = process.env.NEXT_PUBLIC_CUPED_EXPERIMENT_ID ?? '';
 
@@ -28,8 +28,8 @@ export default function HomePage() {
         <ComponentExample />
       </Section>
 
-      <Section title="useObserve">
-        <ObserveExample />
+      <Section title="useTrack">
+        <TrackExample />
       </Section>
 
       <Diagnostics />
@@ -97,14 +97,14 @@ function ComponentExample() {
   );
 }
 
-function ObserveExample() {
-  const observe = useObserve();
+function TrackExample() {
+  const track = useTrack();
   return (
     <button
       onClick={() => {
-        observe('demo_button_clicked', { source: 'next-example' });
+        track('demo_button_clicked', { source: 'next-example' });
         // eslint-disable-next-line no-alert
-        alert('observation queued — check the network tab for /observations');
+        alert('event queued — check the network tab for /events');
       }}
       style={{
         padding: '0.5rem 1rem',
@@ -115,7 +115,7 @@ function ObserveExample() {
         cursor: 'pointer',
       }}
     >
-      Fire observation
+      Fire event
     </button>
   );
 }

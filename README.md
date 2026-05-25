@@ -12,7 +12,7 @@ This repo is a pnpm workspace with three packages:
 | Package | npm | Source | Role |
 |---|---|---|---|
 | `@cuped-io/flame` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame) | [./packages/flame](./packages/flame) | Core SDK. IIFE for `<script>` tag use; ESM/CJS for npm consumers. |
-| `@cuped-io/flame-react` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame-react) | [./packages/flame-react](./packages/flame-react) | React bindings: `<CupedProvider>`, `useExperiment`, `<Experiment>`, `useObserve`. |
+| `@cuped-io/flame-react` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame-react) | [./packages/flame-react](./packages/flame-react) | React bindings: `<CupedProvider>`, `useExperiment`, `<Experiment>`, `useTrack`. |
 | `@cuped-io/flame-edge` | [npmjs.com](https://www.npmjs.com/package/@cuped-io/flame-edge) | [./packages/flame-edge](./packages/flame-edge) | Edge resolver + signed cookie utilities for zero-flash SSR. Web Crypto only. |
 
 ## What it does
@@ -21,7 +21,7 @@ This repo is a pnpm workspace with three packages:
 2. Assigns visitors to variants
 3. Applies variant changes to the DOM (8 change types: `text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`, `redirect`)
 4. Auto-detects e-commerce events (add to cart, checkout, etc.)
-5. Tracks observations with experiment assignments for server-side goal matching
+5. Tracks events with experiment assignments for server-side goal matching
 
 ## Quick start
 

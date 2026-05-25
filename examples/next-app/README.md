@@ -45,7 +45,7 @@ App boots on <http://localhost:3210>.
 | `middleware.ts` | Edge middleware — `createCupedMiddleware` from `@cuped-io/flame-edge/next`. Reads cookie or cold-resolves; writes Set-Cookie. |
 | `app/layout.tsx` | Server component — `readPrehydratedForServerComponent` reads the same cookie via `cookies()` and passes the decoded payload to `<Providers>`. |
 | `app/providers.tsx` | Client component — wraps `<CupedProvider>` with the prehydrated prop. Lives in its own file because Server Components can't use context. |
-| `app/page.tsx` | Demo page — exercises `useExperiment`, `<Experiment>`, and `useObserve`. |
+| `app/page.tsx` | Demo page — exercises `useExperiment`, `<Experiment>`, and `useTrack`. |
 
 The variant configured in your dashboard's `name` field needs to
 match a key in the `<Experiment variants={...}>` map — the example
