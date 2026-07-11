@@ -1,0 +1,19 @@
+{
+  "name": "@cuped-io/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright browser/e2e suite for the flame SDK examples",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "mock-api": "node mock-server/api.mjs",
+    "static": "node mock-server/static.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -7,6 +7,8 @@
   "scripts": {
     "build": "pnpm --filter './packages/*' build",
     "test": "pnpm --filter './packages/*' test",
+    "test:e2e": "pnpm build && pnpm --filter @cuped-io/e2e exec playwright test",
+    "test:e2e:install": "pnpm --filter @cuped-io/e2e exec playwright install --with-deps chromium",
     "typecheck": "pnpm --filter './packages/*' typecheck",
     "lint": "eslint packages/*/src",
     "format": "prettier --write packages/*/src",

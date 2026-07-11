@@ -157,11 +157,18 @@ That's it — `useExperiment` and `<Experiment>` work the same way as Option 2.
 
 ```bash
 pnpm install
-pnpm test         # all packages
+pnpm test         # unit tests, all packages
 pnpm typecheck
 pnpm lint
 pnpm build        # IIFE + ESM/CJS across packages
+
+pnpm test:e2e:install   # one-time: fetch the Chromium browser
+pnpm test:e2e           # Playwright browser tests against both examples
 ```
+
+The Playwright suite ([`e2e/`](./e2e)) drives the real script-tag and
+Next.js examples in a browser against a mock cuped API — assignment
+application, zero-flash SSR, and event delivery. See [e2e/README.md](./e2e/README.md).
 
 Releases are managed by [changesets](https://github.com/changesets/changesets) and published to npm via OIDC trusted publishing with [provenance attestations](https://docs.npmjs.com/generating-provenance-statements).
 
