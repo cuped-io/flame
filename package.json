@@ -10,7 +10,7 @@
     "test:e2e": "pnpm build && pnpm --filter @cuped-io/e2e exec playwright test",
     "test:e2e:install": "pnpm --filter @cuped-io/e2e exec playwright install --with-deps chromium",
     "typecheck": "pnpm --filter './packages/*' typecheck",
-    "lint": "eslint packages/*/src",
+    "lint": "eslint packages/*/src packages/*/scripts",
     "format": "prettier --write packages/*/src",
     "example:next": "pnpm --filter @cuped-io/example-next-app dev",
     "changeset": "changeset",

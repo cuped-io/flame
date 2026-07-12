@@ -34,7 +34,9 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/flame@*.js",
+    "!dist/flame.sri.json"
   ],
   "publishConfig": {
     "access": "public",
