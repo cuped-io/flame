@@ -174,9 +174,22 @@ class Flame {
   }
 
   /**
-   * Apply all assigned variants to the DOM
+   * Apply all assigned variants to the DOM, then reveal the page.
+   *
+   * Anti-flicker (flame#16): an inline snippet hides the page until we
+   * reveal it, so the control never flashes before the variant applies.
+   * We reveal here — the moment variants are on — which beats the snippet's
+   * timeout on the happy path. If the timeout already fired (slow API, page
+   * already revealed showing the original), we skip applying: a late DOM
+   * swap on an already-visible page would itself be a flash, so those
+   * visitors stay on control. No-op when no anti-flicker snippet is present.
    */
   private applyAllVariants(): void {
+    const af = this.getAntiflicker();
+
+    // Timeout already revealed the original → don't apply late (would flash).
+    if (af?.revealed) return;
+
     for (const experiment of this.experiments) {
       const assignment = this.assignments.get(experiment.id);
       if (!assignment) continue;
@@ -186,6 +199,15 @@ class Flame {
 
       applyVariant(variant, this.config?.debug);
     }
+
+    af?.reveal();
+  }
+
+  /** The page's anti-flicker handle, if the inline snippet installed one. */
+  private getAntiflicker(): { revealed: boolean; reveal: () => void } | undefined {
+    if (typeof window === 'undefined') return undefined;
+    return (window as unknown as { __cupedAntiflicker?: { revealed: boolean; reveal: () => void } })
+      .__cupedAntiflicker;
   }
 
   /**

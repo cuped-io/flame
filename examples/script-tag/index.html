@@ -3,6 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Anti-flicker (flame#16, Option B): a tiny inline snippet hides the page
+         instantly (zero network dependency), then flame reveals it on
+         variant-resolve OR on the timeout safety-net below. This is what a
+         customer pastes (spark generates it, spark#251). -->
+    <style id="cuped-af-hide">
+      html {
+        opacity: 0 !important;
+      }
+    </style>
+    <script>
+      (function () {
+        var af = { revealed: false };
+        af.reveal = function () {
+          if (af.revealed) return; // idempotent: resolve + timeout can both fire
+          af.revealed = true;
+          var s = document.getElementById('cuped-af-hide');
+          if (s && s.parentNode) s.parentNode.removeChild(s);
+        };
+        window.__cupedAntiflicker = af;
+        // Safety-net: if flame hasn't revealed within the window (slow/failed
+        // API), reveal the ORIGINAL so the page is never left hidden. Instant
+        // hide is only safe because this guarantees a reveal.
+        setTimeout(af.reveal, 1000);
+      })();
+    </script>
+
     <title>cuped.io flame script-tag test page</title>
     <style>
       body {

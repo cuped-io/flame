@@ -79,12 +79,66 @@ test('fires a custom track() event on button click', async ({ page, request }) =
   expect(event?.metadata?.source).toBe('script-tag-example');
 });
 
-// Anti-flicker isn't implemented in flame yet: the script-tag SDK
-// applies variants only after the experiments/assign roundtrip, so the
-// control markup paints first and is then mutated — an unavoidable
-// flash today. Enable this once anti-flicker lands (issue #21). The
-// SSR/next-app path already renders flash-free (see next-app.spec.ts).
-test.fixme('does not flash the control before applying the treatment', async ({ page }) => {
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).not.toHaveText('Original text content.');
+// Anti-flicker (flame#16). The naive assertion "#target-text is not the
+// control" passes even without a fix, because Playwright auto-waits until
+// the treatment has applied — it never observes the transient flash. To
+// give the red teeth we WIDEN the flash window (hold the experiments
+// roundtrip) and assert the anti-flicker *contract*: the document is
+// hidden until flame reveals it (on variant-resolve OR timeout). Today,
+// with no hide, the control is visible during the window → this fails for
+// the right reason (the flash). The SSR/next-app path renders flash-free
+// already (see next-app.spec.ts).
+test('does not flash the control before applying the treatment', async ({ page }) => {
+  // Hold /experiments/active so variants can't apply immediately. Without
+  // anti-flicker the control markup (which paints before the bottom script
+  // even runs) is visible for the whole delay — the flash we must kill.
+  await page.route('**/experiments/active*', async (route) => {
+    await new Promise((r) => setTimeout(r, 400));
+    await route.continue();
+  });
+
+  await page.goto(PAGE, { waitUntil: 'domcontentloaded' });
+
+  // While variants are still pending, the user must NOT see the control.
+  // Contract: the root is hidden (opacity 0) until flame reveals it.
+  const rootOpacityWhilePending = await page.evaluate(
+    () => getComputedStyle(document.documentElement).opacity
+  );
+  expect(rootOpacityWhilePending, 'root must be hidden until variants resolve').toBe('0');
+
+  // And it must end revealed on the treatment — not flashed, not stuck hidden.
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).opacity))
+    .toBe('1');
+});
+
+// The timeout safety-net (flame#16). Instant-hide's whole strength is that
+// it doesn't wait on the network — which means a stalled/failed API would
+// leave the page hidden FOREVER unless a timeout reveals it. That would be
+// strictly worse than the flash (blank page vs. brief flash). So the reveal
+// must fire on resolve OR timeout, and the timeout must reveal the ORIGINAL,
+// never a blank. This test is proven red-first against a hide-with-no-timeout.
+test('reveals the original after the timeout when the API stalls (never left blank)', async ({
+  page,
+}) => {
+  // Stall /experiments/active so variants never resolve within the page's life.
+  await page.route('**/experiments/active*', async (route) => {
+    await new Promise((r) => setTimeout(r, 10_000));
+    await route.continue();
+  });
+
+  await page.goto(PAGE, { waitUntil: 'domcontentloaded' });
+
+  // Hidden instantly by the inline snippet.
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).opacity)).toBe('0');
+
+  // The timeout must reveal it — showing the ORIGINAL control, not blank, and
+  // not the treatment (which never resolved).
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).opacity), {
+      timeout: 4000,
+    })
+    .toBe('1');
+  await expect(page.locator('#target-text')).toContainText('Original text content.');
 });
