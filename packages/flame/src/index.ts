@@ -124,15 +124,25 @@ class Flame {
           device_id_created_at: this.identity.deviceIdCreatedAt ?? undefined,
         };
 
-        // Get assignments for each experiment
-        for (const experiment of this.experiments) {
-          const assignment = await getOrCreateAssignment(
-            experiment,
-            this.userId,
-            this.apiClient,
-            this.context ?? undefined,
-            identityMeta
-          );
+        // Resolve assignments for all experiments concurrently — one parallel
+        // batch instead of N serial round-trips, so a slow API no longer
+        // compounds per experiment (flame#17). Order is preserved by
+        // Promise.all, so registration below stays deterministic.
+        // Hoist the flow-narrowed members into locals: inside the map callback
+        // TS widens `this.userId`/`this.apiClient` back to their nullable
+        // declared types, so capture the narrowed values here first.
+        const userId = this.userId;
+        const apiClient = this.apiClient;
+        const context = this.context ?? undefined;
+        const resolved = await Promise.all(
+          this.experiments.map((experiment) =>
+            getOrCreateAssignment(experiment, userId, apiClient, context, identityMeta).then(
+              (assignment) => ({ experiment, assignment })
+            )
+          )
+        );
+
+        for (const { experiment, assignment } of resolved) {
           this.assignments.set(experiment.id, assignment);
           this.trackingManager.registerAssignment(assignment);
 

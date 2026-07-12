@@ -142,3 +142,27 @@ test('reveals the original after the timeout when the API stalls (never left bla
     .toBe('1');
   await expect(page.locator('#target-text')).toContainText('Original text content.');
 });
+
+// N+1 assignment (flame#17). The mock serves two experiments, so the SDK
+// makes two /assign calls. A serial loop runs them one-after-another (never
+// more than one in flight); parallel runs them at once (both in flight). We
+// count max concurrency deterministically by holding each /assign briefly —
+// no flaky wall-clock threshold. Red on the serial loop (max 1), green once
+// parallelized (max 2).
+test('assigns experiments concurrently, not one serial round-trip at a time', async ({ page }) => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  await page.route('**/experiments/*/assign', async (route) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 200));
+    inFlight -= 1;
+    await route.continue();
+  });
+
+  await page.goto(PAGE);
+  // Wait until assignment has completed (treatment applied).
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+  expect(maxInFlight, 'the two /assign calls must overlap (parallel), not run serially').toBe(2);
+});
