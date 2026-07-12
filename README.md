@@ -29,14 +29,28 @@ You'll need a DSN. Sign up at [cuped.io](https://cuped.io), create a project, an
 
 ### Option 1: Script tag (no-code DOM mutations)
 
-Drop this in your `<head>` and define variants in the dashboard:
+Drop this in your `<head>` and define variants in the dashboard. Pin to a
+version and guard it with [Subresource Integrity](https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity)
+so a bad deploy can't reach your site (`crossorigin` is required for SRI to
+work on the cross-origin script):
 
 ```html
 <script
-  src="https://cdn.cuped.io/flame.js"
+  src="https://cdn.cuped.io/flame@0.4.0.js"
+  integrity="sha384-zV6If+2sDPRrWSbiaFZ2P5A4fBe6uIqixLvv3rAeMZrqbztP4P/8s0fRfAQxr2TD"
+  crossorigin="anonymous"
   data-dsn="https://YOUR_KEY@api.cuped.io"
 ></script>
 ```
+
+The dashboard's install snippet is always pinned to the current release with
+its SRI hash filled in, and that hash is also published at
+[`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json).
+
+> **Prefer auto-updates over pinning?** `https://cdn.cuped.io/flame.js` is a
+> floating "latest" that always serves the newest release. It can't be pinned
+> with SRI (the bytes change on every deploy), so you trade integrity
+> verification and rollback safety for automatic upgrades.
 
 ### Option 2: React (CSR)
 

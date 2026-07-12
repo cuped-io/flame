@@ -23,14 +23,20 @@ You'll need a DSN — get one at [cuped.io](https://cuped.io) under **Settings �
 
 ### Script tag (no-code DOM mutations)
 
+Pin to a version and guard it with [Subresource Integrity](https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity) — `crossorigin` is required for SRI on the cross-origin script:
+
 ```html
 <script
-  src="https://cdn.cuped.io/flame.js"
+  src="https://cdn.cuped.io/flame@0.4.0.js"
+  integrity="sha384-zV6If+2sDPRrWSbiaFZ2P5A4fBe6uIqixLvv3rAeMZrqbztP4P/8s0fRfAQxr2TD"
+  crossorigin="anonymous"
   data-dsn="https://YOUR_KEY@api.cuped.io"
 ></script>
 ```
 
 The SDK auto-initializes from the `data-dsn` attribute, fetches active experiments, applies variant DOM changes, and tracks events. Define the changes per variant in the cuped.io dashboard.
+
+The SRI hash for the current release is published at [`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json), and the dashboard's install snippet is always pinned to it. The unversioned `https://cdn.cuped.io/flame.js` is a floating "latest" that always serves the newest release — convenient, but it can't be SRI-pinned (its bytes change on every deploy) and gives up rollback safety.
 
 ### Programmatic
 
