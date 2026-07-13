@@ -32,6 +32,9 @@ class Flame {
   private experiments: Experiment[] = [];
   private assignments: Map<string, StoredAssignment> = new Map();
   private initialized = false;
+  // Events fired via track() before init() ran — buffered here and flushed
+  // once the tracking manager exists (useTrack pre-init buffering, #20).
+  private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
 
   /**
    * Initialize the SDK with configuration
@@ -173,6 +176,13 @@ class Flame {
       // Start auto-tracking (includes event-based ecommerce tracking)
       this.trackingManager.startAutoTracking();
 
+      // Flush events buffered before init ran (#20) — assignments are now
+      // registered, so they carry the active experiment context.
+      for (const event of this.pendingEvents) {
+        this.trackingManager.track(event.eventType, event.metadata);
+      }
+      this.pendingEvents = [];
+
       // Track initial pageview
       this.trackingManager.trackPageview();
 
@@ -233,7 +243,10 @@ class Flame {
    */
   track(eventType: string, metadata?: Record<string, unknown>): void {
     if (!this.trackingManager) {
-      console.warn('[Flame] SDK not initialized');
+      // Fired before init() ran — buffer it and deliver once init sets up the
+      // tracking manager (matches useTrack's documented behavior; #20). Prevents
+      // silently dropping events that fire during early render.
+      this.pendingEvents.push({ eventType, metadata });
       return;
     }
 
