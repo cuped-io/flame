@@ -43,13 +43,14 @@ work on the cross-origin script):
 ></script>
 ```
 
-The dashboard's install snippet is always pinned to the current release with
-its SRI hash filled in, and that hash is also published at
-[`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json).
+The SRI hash for every published version is listed at
+[`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json) (a
+`versions` map plus a `latest` pointer). Pinned URLs are write-once and never
+removed, so your pin keeps resolving byte-for-byte across later releases.
 
 > **Prefer auto-updates over pinning?** `https://cdn.cuped.io/flame.js` is a
 > floating "latest" that always serves the newest release. It can't be pinned
-> with SRI (the bytes change on every deploy), so you trade integrity
+> with SRI (the bytes change on every release), so you trade integrity
 > verification and rollback safety for automatic upgrades.
 
 ### Option 2: React (CSR)

@@ -1,4 +1,9 @@
-name: Build and Deploy
+name: CI
+
+# CI only — build/typecheck/lint/test. CDN publishing lives in release.yml,
+# gated on an actual changesets release (ADR-0022): publishing from every
+# main push both fought R2's write-once pins (same version, different bytes
+# between releases) and served unreleased code on the floating flame.js.
 
 on:
   push:
@@ -41,44 +46,3 @@ jobs:
 
       - name: Build
         run: pnpm build
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dist
-          path: packages/flame/dist/
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    permissions:
-      contents: read
-      deployments: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: dist
-          path: dist/
-
-      - name: Create Pages project if not exists
-        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
-        with:
-          # Pin the wrangler CLI explicitly. wrangler-action v4 defaults
-          # wranglerVersion to `latest`, which would float the CLI on
-          # every deploy; v3 used to pin a default. Pin here to keep the
-          # no-float principle the rest of CI follows. Bump manually
-          # (Dependabot does not track this string input).
-          wranglerVersion: "4.94.0"
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages project create flame --production-branch=main
-        continue-on-error: true
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
-        with:
-          wranglerVersion: "4.94.0"
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=flame
