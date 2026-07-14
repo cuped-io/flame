@@ -3,6 +3,16 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manual recovery for a release whose npm publish succeeded but whose CDN
+  # publish failed: `outputs.published` is only 'true' on the one run that
+  # publishes to npm, so a plain re-run skips the CDN step forever. Dispatch
+  # this workflow FROM THE RELEASE TAG (@cuped-io/flame@X.Y.Z) to rebuild
+  # and re-publish the CDN artifacts. Write-once semantics make it safe:
+  # identical bytes are a no-op, differing bytes (wrong ref) hard-fail. If
+  # a rebuild is not byte-reproducible, fall back to seeding dist/flame.js
+  # out of the npm tarball (its exact released bytes):
+  #   pnpm --filter @cuped-io/flame seed-cdn <version> <extracted flame.js>
+  workflow_dispatch:
 
 # Cancel in-flight release runs if a newer commit lands; we only ever
 # want the most recent main to be the source of truth for "what's released".
@@ -12,6 +22,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write          # changesets/action commits version bumps + tags
@@ -48,6 +59,7 @@ jobs:
         run: pnpm --filter @cuped-io/flame build
 
       - name: Create Release PR or Publish
+        id: changesets
         uses: changesets/action@63a615b9cd06ba9a3e6d13796c7fbcb080a60a0b # v1
         with:
           version: pnpm version-packages
@@ -58,3 +70,53 @@ jobs:
           # No NPM_TOKEN — auth comes from the OIDC token via id-token: write
           # and the trusted-publisher config on npmjs.com.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # CDN artifacts exist exactly when a version is released (ADR-0022).
+      # Gate on @cuped-io/flame specifically: a flame-react/flame-edge-only
+      # release must not re-publish flame's pin — main may have moved since
+      # flame's version last shipped, and rebuilding it would attempt to
+      # write different bytes to the existing write-once key and fail.
+      # `pnpm release` (above) rebuilt dist/ at the released version, so
+      # dist/flame.js is exactly the published bytes.
+      - name: Publish CDN artifacts to R2
+        if: steps.changesets.outputs.published == 'true' && contains(fromJson(steps.changesets.outputs.publishedPackages).*.name, '@cuped-io/flame')
+        run: pnpm --filter @cuped-io/flame publish-cdn
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Bucket-scoped R2 S3 credential (write + list on the CDN bucket
+          # only), minted per infra's RUNBOOK_CDN_CUTOVER.md.
+          R2_ACCESS_KEY_ID: ${{ secrets.CDN_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CDN_R2_SECRET_ACCESS_KEY }}
+          # The bucket is provisioned by cuped-infra (modules/r2-cdn-bucket).
+          R2_BUCKET: cuped-cdn
+
+  # Manual CDN re-publish (see the workflow_dispatch comment up top).
+  # Rebuilds at the dispatched ref — dispatch from the release tag.
+  republish-cdn:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 10
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @cuped-io/flame
+        run: pnpm --filter @cuped-io/flame build
+
+      - name: Publish CDN artifacts to R2
+        run: pnpm --filter @cuped-io/flame publish-cdn
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.CDN_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CDN_R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: cuped-cdn

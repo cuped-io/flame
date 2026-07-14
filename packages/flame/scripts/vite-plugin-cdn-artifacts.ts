@@ -15,12 +15,13 @@ export interface CdnArtifactsPlugin {
 
 /**
  * Vite/Rollup plugin that, after the IIFE bundle is written, emits the
- * immutable pinned copy (`flame@X.Y.Z.js`) and the SRI manifest
- * (`flame.sri.json`) next to it.
+ * immutable pinned copy (`flame@X.Y.Z.js`) next to it.
  *
- * It hashes the bytes actually written to `dist/flame.js` (re-read from disk,
- * not the in-memory chunk) so the published SRI matches the file the CDN
- * serves exactly. The (unit-tested) planning lives in ./cdn-artifacts.ts.
+ * It copies the bytes actually written to `dist/flame.js` (re-read from
+ * disk, not the in-memory chunk) so the pinned artifact matches the
+ * floating file exactly. The SRI manifest is not built here — it is a
+ * publish-time projection of the R2 bucket (see ./cdn-publish.ts and
+ * ember ADR-0021). The (unit-tested) planning lives in ./cdn-artifacts.ts.
  */
 export function cdnArtifactsPlugin(version: string): CdnArtifactsPlugin {
   return {

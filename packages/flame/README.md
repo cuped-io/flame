@@ -36,7 +36,7 @@ Pin to a version and guard it with [Subresource Integrity](https://developer.moz
 
 The SDK auto-initializes from the `data-dsn` attribute, fetches active experiments, applies variant DOM changes, and tracks events. Define the changes per variant in the cuped.io dashboard.
 
-The SRI hash for the current release is published at [`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json), and the dashboard's install snippet is always pinned to it. The unversioned `https://cdn.cuped.io/flame.js` is a floating "latest" that always serves the newest release — convenient, but it can't be SRI-pinned (its bytes change on every deploy) and gives up rollback safety.
+The SRI hash for every published version is listed in [`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json) (a `versions` map plus a `latest` pointer). Pinned `flame@X.Y.Z.js` URLs are write-once and never removed, so a pin keeps resolving byte-for-byte across all later releases and can always be rolled back to. The unversioned `https://cdn.cuped.io/flame.js` is a floating "latest" that always serves the newest release — convenient, but it can't be SRI-pinned (its bytes change on every release) and gives up rollback safety.
 
 ### Programmatic
 
