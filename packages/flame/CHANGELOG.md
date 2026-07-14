@@ -1,5 +1,19 @@
 # @cuped-io/flame
 
+## 0.5.0
+
+### Minor Changes
+
+- 9136a16: Anti-flicker for the script-tag SDK (#16). When an anti-flicker hide snippet is present on the page, flame now reveals the page the moment variants are applied — coordinating through `window.__cupedAntiflicker` — so the control never flashes before the treatment. The reveal is idempotent and race-safe with the snippet's timeout fallback: if the timeout already revealed the original (slow or failed API), flame skips a late variant apply so there's no late flash, and those visitors stay on control. Fully backward-compatible: a no-op when no anti-flicker snippet is present.
+- 0e76ec1: Publish a versioned, integrity-pinnable CDN artifact.
+
+  The script-tag build now emits an immutable `flame@X.Y.Z.js` alongside the floating `flame.js`, plus a `flame.sri.json` manifest carrying the Subresource Integrity (sha384) hash for each path. Embedders can pin to the versioned path with `integrity` + `crossorigin="anonymous"` so a bad deploy can't silently reach every site, and can roll back by pointing at the previous version. The floating `flame.js` remains as an opt-in "latest" (unpinnable by design). See the install snippet in the README.
+
+### Patch Changes
+
+- 1176d42: Parallelize experiment assignment on init (#17). The script-tag SDK previously requested assignments in a serial loop — N experiments meant N sequential `/assign` round-trips, so a slow API compounded per experiment (and delayed variant application). Assignments now resolve concurrently in a single batch, with registration order preserved. No API change; a slow API now costs one round-trip, not N.
+- 276041c: Buffer events tracked before init (#20). `track()` / `useTrack()` called before the SDK finished initializing previously dropped the event silently — contradicting `useTrack`'s documented behavior. Pre-init events are now buffered and delivered once init completes, carrying the active experiment assignments. Also removed an unused internal URL-pattern matcher (dead code — the backend is the source of truth for pageview-goal URL matching).
+
 ## 0.4.0
 
 ### Minor Changes
