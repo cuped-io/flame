@@ -36,10 +36,18 @@ export function integrityHash(
   return `${algorithm}-${digest}`;
 }
 
-// A version is only allowed to contain the characters npm/semver actually
-// uses. This keeps the value from escaping the CDN path (`../`) or minting a
-// filename that isn't a stable, immutable pin.
-const SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/;
+// Strict semver: numeric core, optional prerelease. Deliberately stricter
+// than "filename-safe": every pinned key in the bucket feeds the manifest
+// projection and its semver ordering, so a malformed version (a `v0.4.0`
+// seed typo, path characters) must be impossible to mint — a NaN in the
+// sort comparator would silently scramble `latest`. No build metadata:
+// changesets never emits it, and ordering would have to ignore it anyway.
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+/** Whether `version` is a prerelease (e.g. `1.0.0-beta.2`). */
+export function isPrerelease(version: string): boolean {
+  return version.includes('-');
+}
 
 /**
  * The immutable, pinned filename for a given package version, e.g.
@@ -48,8 +56,8 @@ const SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/;
  * be rolled back by pointing at the previous pin.
  */
 export function versionedName(version: string): string {
-  if (!SAFE_VERSION.test(version)) {
-    throw new Error(`Unsafe version for CDN filename: ${JSON.stringify(version)}`);
+  if (!SEMVER.test(version)) {
+    throw new Error(`Not a strict semver version for a CDN pin: ${JSON.stringify(version)}`);
   }
   return `flame@${version}.js`;
 }
@@ -88,13 +96,14 @@ export const MANIFEST_NAME = 'flame.sri.json';
 
 /**
  * Recover the version from a pinned filename, e.g. `flame@0.4.0.js` →
- * `0.4.0`. Returns null for keys that are not pinned artifacts (the
- * floating `flame.js`, the manifest, anything else in the bucket), so a
- * bucket listing can be filtered with it directly.
+ * `0.4.0`. Returns null for keys that are not strict-semver pinned
+ * artifacts (the floating `flame.js`, the manifest, any malformed or
+ * hand-placed key), so a bucket listing can be filtered with it directly
+ * and non-semver keys can never poison the manifest projection.
  */
 export function parseVersionedName(key: string): string | null {
   const match = /^flame@(.+)\.js$/.exec(key);
-  if (!match || !SAFE_VERSION.test(match[1])) {
+  if (!match || !SEMVER.test(match[1])) {
     return null;
   }
   return match[1];
@@ -108,13 +117,13 @@ interface ArtifactEntry {
 /**
  * The published `flame.sri.json`: one entry per still-supported version
  * (policy: every version, forever), plus which of them is the newest
- * release — the version whose bytes the floating `flame.js` serves.
+ * stable release — the version whose bytes the floating `flame.js` serves.
  */
 export interface CdnManifest {
   algorithm: SriAlgorithm;
-  /** The newest released version; `versions[latest]` describes it. */
+  /** The newest STABLE released version; `versions[latest]` describes it. */
   latest: string;
-  /** version → its immutable pinned artifact. */
+  /** version → its immutable pinned artifact (prereleases included). */
   versions: Record<string, ArtifactEntry>;
 }
 
@@ -145,11 +154,10 @@ export function planCdnArtifacts({ version, iife }: PlanCdnArtifactsInput): CdnA
   };
 }
 
-// Semver-ish comparator, sufficient for changesets output: dotted numeric
-// core, optional prerelease after `-` (a prerelease sorts before its
-// release; prerelease identifiers compare per semver §11). Build metadata
-// (`+...`) is not stripped — changesets never emits it, and two versions
-// differing only in build metadata would collide as filenames anyway.
+// Semver comparator over versions that already passed the SEMVER guard
+// (versionedName / parseVersionedName): numeric core, optional prerelease
+// after `-` (a prerelease sorts before its release; prerelease identifiers
+// compare per semver §11).
 export function compareVersions(a: string, b: string): number {
   const [coreA, preA] = splitPrerelease(a);
   const [coreB, preB] = splitPrerelease(b);
@@ -196,24 +204,30 @@ export interface ManifestEntryInput {
  * manifest is a function of what is actually resolvable, never an append
  * onto the previous manifest, so it can't drift from the bucket and
  * self-heals after a dropped release (ADR-0021). `latest` is the semver-max
- * of the published versions — releases are monotonic, so this is the
- * newest release.
+ * of the STABLE published versions: a prerelease is listed (pinnable) but
+ * must never become `latest` — the floating `flame.js` follows `latest`,
+ * and un-pinned production embedders must not be handed beta bytes (the
+ * CDN analogue of npm's latest/next dist-tag split).
  */
 export function projectSriManifest(entries: ManifestEntryInput[]): CdnManifest {
-  if (entries.length === 0) {
-    throw new Error('Cannot project an SRI manifest from an empty version set');
-  }
   const sorted = [...entries].sort((a, b) => compareVersions(a.version, b.version));
+  const stable = sorted.filter(({ version }) => !isPrerelease(version));
+  if (stable.length === 0) {
+    throw new Error(
+      'Cannot project an SRI manifest without a stable version: ' +
+        '`latest` (and the floating flame.js) must point at a stable release',
+    );
+  }
   const versions: Record<string, ArtifactEntry> = {};
   for (const { version, integrity } of sorted) {
-    if (versions[version]) {
+    if (Object.prototype.hasOwnProperty.call(versions, version)) {
       throw new Error(`Duplicate version in manifest projection: ${version}`);
     }
     versions[version] = { path: versionedName(version), integrity };
   }
   return {
     algorithm: 'sha384',
-    latest: sorted[sorted.length - 1].version,
+    latest: stable[stable.length - 1].version,
     versions,
   };
 }

@@ -31,6 +31,15 @@ describe('versionedName', () => {
     expect(() => versionedName('1.0.0/../evil')).toThrow();
     expect(() => versionedName('1.0 .0')).toThrow();
   });
+
+  it('rejects non-strict-semver versions that would poison manifest ordering', () => {
+    // A `v0.4.0` seed typo would parse as NaN in the semver comparator and
+    // scramble the projected `latest` — refuse to mint the key at all.
+    expect(() => versionedName('v0.4.0')).toThrow();
+    expect(() => versionedName('0.4')).toThrow();
+    expect(() => versionedName('constructor')).toThrow();
+    expect(() => versionedName('1.0.0+build.5')).toThrow();
+  });
 });
 
 describe('installSnippet', () => {
@@ -70,6 +79,14 @@ describe('parseVersionedName', () => {
     expect(parseVersionedName('flame.sri.json')).toBeNull();
     expect(parseVersionedName('flame@.js')).toBeNull();
     expect(parseVersionedName('flame@1.0.0/../evil.js')).toBeNull();
+  });
+
+  it('rejects malformed or hand-placed version keys', () => {
+    // These would otherwise reach the semver comparator (NaN → scrambled
+    // sort) or, for 'constructor', trip Object.prototype lookups.
+    expect(parseVersionedName('flame@v0.4.0.js')).toBeNull();
+    expect(parseVersionedName('flame@constructor.js')).toBeNull();
+    expect(parseVersionedName('flame@01.2.3.js')).toBeNull();
   });
 });
 
@@ -131,6 +148,24 @@ describe('projectSriManifest', () => {
     // An empty bucket means nothing was published — projecting a manifest
     // for it would advertise a "latest" that doesn't resolve.
     expect(() => projectSriManifest([])).toThrow();
+  });
+
+  it('never elects a prerelease as latest', () => {
+    // The floating flame.js follows `latest`; un-pinned production
+    // embedders must not be handed beta bytes (npm latest/next split).
+    const manifest = projectSriManifest([
+      { version: '0.9.0', integrity: 'sha384-stable' },
+      { version: '1.0.0-beta.1', integrity: 'sha384-beta' },
+    ]);
+
+    expect(manifest.latest).toBe('0.9.0');
+    expect(Object.keys(manifest.versions)).toEqual(['0.9.0', '1.0.0-beta.1']);
+  });
+
+  it('refuses a version set with no stable release', () => {
+    expect(() => projectSriManifest([{ version: '1.0.0-rc.1', integrity: 'sha384-rc' }])).toThrow(
+      /stable/,
+    );
   });
 
   it('refuses duplicate versions', () => {

@@ -21,10 +21,17 @@ import {
  *   2. List the bucket and project `flame.sri.json` from every pinned
  *      artifact present — the manifest is a function of the bucket, never
  *      an append onto the previous manifest.
- *   3. Only if `version` is the newest published version, overwrite the
- *      floating `flame.js` with its bytes ("floating = latest released",
- *      ADR-0022 — a re-run for an older version must not move it back).
+ *   3. Only if `version` is the newest stable published version, overwrite
+ *      the floating `flame.js` with its bytes ("floating = latest
+ *      released", ADR-0022 — a re-run for an older version or a prerelease
+ *      must not move it).
  *   4. Overwrite the manifest.
+ *
+ * The four writes are not atomic (Pages snapshots were). A crash mid-way
+ * leaves the pin resolvable but the manifest/floating stale — accepted in
+ * ADR-0021 because the manifest is a projection and self-heals on the
+ * next publish; the release workflow's manual re-publish path
+ * (workflow_dispatch in release.yml) is the immediate recovery.
  */
 
 const encoder = new TextEncoder();
@@ -93,10 +100,11 @@ export async function publishCdnRelease({
 
   const manifest = await projectManifestFromStore(store);
 
-  // "Floating = latest released" (ADR-0022). Releases are monotonic, so in
-  // the normal case `version` is the manifest's latest; the guard only
-  // matters for a re-run of an older release, which must not drag the
-  // floating path backwards.
+  // "Floating = latest released" (ADR-0022), where latest means the newest
+  // STABLE release (projectSriManifest). The guard covers two cases that
+  // must not move flame.js: a re-run of an older release (must not drag
+  // the floating path backwards) and a prerelease publish (pinnable, but
+  // un-pinned embedders must not receive beta bytes).
   const floatingUpdated = manifest.latest === version;
   if (floatingUpdated) {
     await store.put(LATEST_NAME, iife, SCRIPT_CONTENT_TYPE);
@@ -115,16 +123,18 @@ export async function publishCdnRelease({
  */
 async function projectManifestFromStore(store: CdnObjectStore): Promise<CdnManifest> {
   const keys = await store.list();
-  const entries = [];
-  for (const key of keys) {
-    const version = parseVersionedName(key);
-    if (version === null) continue;
-    const bytes = await store.get(key);
-    if (bytes === null) {
-      throw new Error(`${key} was listed but could not be read`);
-    }
-    entries.push({ version, integrity: integrityHash(bytes) });
-  }
+  const pinned = keys
+    .map((key) => ({ key, version: parseVersionedName(key) }))
+    .filter((entry): entry is { key: string; version: string } => entry.version !== null);
+  const entries = await Promise.all(
+    pinned.map(async ({ key, version }) => {
+      const bytes = await store.get(key);
+      if (bytes === null) {
+        throw new Error(`${key} was listed but could not be read`);
+      }
+      return { version, integrity: integrityHash(bytes) };
+    }),
+  );
   return projectSriManifest(entries);
 }
 

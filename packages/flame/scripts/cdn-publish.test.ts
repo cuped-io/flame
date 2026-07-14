@@ -105,6 +105,34 @@ describe('publishCdnRelease', () => {
     expect(text('flame.js')).toBe('window.flame="0.5.0";');
   });
 
+  it('does not move the floating flame.js to a prerelease', async () => {
+    const { store, text } = memoryStore();
+    await publishCdnRelease({ store, version: '0.5.0', iife: iife('0.5.0') });
+
+    const pre = await publishCdnRelease({ store, version: '1.0.0-beta.1', iife: iife('beta') });
+
+    // The prerelease pin is published and listed, but latest (and the
+    // floating path) stay on the newest stable release.
+    expect(pre.floatingUpdated).toBe(false);
+    expect(text('flame.js')).toBe('window.flame="0.5.0";');
+    const manifest = JSON.parse(text('flame.sri.json')!);
+    expect(manifest.latest).toBe('0.5.0');
+    expect(Object.keys(manifest.versions)).toEqual(['0.5.0', '1.0.0-beta.1']);
+  });
+
+  it('ignores malformed keys in the bucket when projecting the manifest', async () => {
+    // A hand-placed junk key must not poison ordering or the projection.
+    const { store, text } = memoryStore({
+      'flame@v0.3.0.js': 'window.flame="typo";',
+      'some-note.txt': 'not an artifact',
+    });
+    await publishCdnRelease({ store, version: '0.4.0', iife: iife('0.4.0') });
+
+    const manifest = JSON.parse(text('flame.sri.json')!);
+    expect(Object.keys(manifest.versions)).toEqual(['0.4.0']);
+    expect(manifest.latest).toBe('0.4.0');
+  });
+
   it('projects the manifest from the bucket, self-healing a stale manifest', async () => {
     // Simulate the aftermath of a dropped release: 0.5.0's pin landed but
     // the manifest write never happened. The next publish must repair it

@@ -32,6 +32,11 @@ export function createR2Store({
     region: 'auto',
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId, secretAccessKey },
+    // aws-sdk >= 3.729 defaults both to WHEN_SUPPORTED, which injects
+    // x-amz-checksum-* headers R2's S3 API rejects. Cloudflare's docs
+    // require WHEN_REQUIRED for R2.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
 
   return {
