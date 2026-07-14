@@ -27,8 +27,8 @@ Pin to a version and guard it with [Subresource Integrity](https://developer.moz
 
 ```html
 <script
-  src="https://cdn.cuped.io/flame@0.4.0.js"
-  integrity="sha384-hFM7xfw0tzMU7yK4TR8fA6Y2DNtbFSlR2CuE8CIESzD1QeYoHD0e4NJJdVccYeCl"
+  src="https://cdn.cuped.io/flame@0.5.0.js"
+  integrity="sha384-EyZs8bbbc37P0vhn5CdDiwF5Ph/dgG7+92yeULGePA4XIUw52Wx2qWQvs+hsdrLk"
   crossorigin="anonymous"
   data-dsn="https://YOUR_KEY@api.cuped.io"
 ></script>
