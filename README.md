@@ -37,7 +37,7 @@ work on the cross-origin script):
 ```html
 <script
   src="https://cdn.cuped.io/flame@0.4.0.js"
-  integrity="sha384-zV6If+2sDPRrWSbiaFZ2P5A4fBe6uIqixLvv3rAeMZrqbztP4P/8s0fRfAQxr2TD"
+  integrity="sha384-hFM7xfw0tzMU7yK4TR8fA6Y2DNtbFSlR2CuE8CIESzD1QeYoHD0e4NJJdVccYeCl"
   crossorigin="anonymous"
   data-dsn="https://YOUR_KEY@api.cuped.io"
 ></script>
