@@ -79,6 +79,112 @@ test('fires a custom track() event on button click', async ({ page, request }) =
   expect(event?.metadata?.source).toBe('script-tag-example');
 });
 
+// --- goal auto-tracking (cuped-io/ember#171) -------------------------
+//
+// The mock serves the shared contract payload (`CONTRACT_GOALS` — the
+// byte-identical twin of ember's golden fixture), so these specs assert
+// the half a server-side test can't reach: that a real browser turns
+// that payload into DOM listeners, and that an interaction fires an
+// event *named after the goal*. That name is what the backend matches
+// conversions on, so "no event by that name" and "no conversions, ever"
+// are the same sentence — which is how #171 stayed invisible while both
+// suites were green.
+
+test('auto-tracks a click goal with a custom name and selector', async ({ page, request }) => {
+  await page.goto(PAGE);
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+  await page.locator('.add-to-cart-cta').click();
+  await flushBeacons(page);
+
+  // `cart_add_clicked` deliberately does NOT collide with the SDK's
+  // hardcoded e-commerce auto-goals — under #171 exactly this case was
+  // dead, and a name that did collide masked it.
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('cart_add_clicked');
+
+  const event = (await getRecordedEvents(request)).find(
+    (e) => e.event_type === 'cart_add_clicked'
+  );
+  expect(event?.metadata?.selector).toBe('.add-to-cart-cta');
+  expect(event?.experiment_assignments).toContainEqual({
+    experiment_id: 'exp_script_tag',
+    variant_id: 'var_script_treatment',
+  });
+});
+
+test('auto-tracks a submit goal on a custom form selector', async ({ page, request }) => {
+  await page.goto(PAGE);
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+  // The reported #171 configuration: primary goal `checkout_complete`,
+  // type submit, selector `#checkout-form`.
+  await page.locator('#checkout-form button[type="submit"]').click();
+  await flushBeacons(page);
+
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('checkout_complete');
+
+  const event = (await getRecordedEvents(request)).find(
+    (e) => e.event_type === 'checkout_complete'
+  );
+  expect(event?.metadata?.event_type).toBe('submit');
+  expect(event?.experiment_assignments).toContainEqual({
+    experiment_id: 'exp_script_tag',
+    variant_id: 'var_script_treatment',
+  });
+});
+
+test('auto-tracks a project guardrail goal like any other click goal', async ({
+  page,
+  request,
+}) => {
+  await page.goto(PAGE);
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+  // Guardrails aren't attached to the experiment server-side — they ride
+  // along on the payload, and the SDK can't tell them apart. If they
+  // stopped being served, this is the tracker that dies.
+  await page.locator('#open-ticket').click();
+  await flushBeacons(page);
+
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('support_ticket_opened');
+});
+
+test('fires goal events only for interactions matching their selector', async ({
+  page,
+  request,
+}) => {
+  await page.goto(PAGE);
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+  await page.locator('#untracked-copy').click();
+  await flushBeacons(page);
+
+  // Wait for the beacon carrying the pageview before asserting absence:
+  // a goal event fired by the click above would ride the same queue
+  // flush, so once this lands, "not sent" is a real observation rather
+  // than "not sent yet". Reading the sink once raced here under the
+  // full suite.
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('pageview');
+
+  const types = (await getRecordedEvents(request)).map((e) => e.event_type);
+  expect(types).not.toContain('cart_add_clicked');
+  expect(types).not.toContain('checkout_complete');
+  expect(types).not.toContain('support_ticket_opened');
+  // A pageview goal registers no DOM listener at all — its name is never
+  // an event name (the SDK fires the literal `pageview`, which the
+  // backend matches by url_pattern). This is why pageview goals kept
+  // converting through #171 while click/submit goals didn't.
+  expect(types).not.toContain('pricing_viewed');
+});
+
 // Anti-flicker (flame#16). The naive assertion "#target-text is not the
 // control" passes even without a fix, because Playwright auto-waits until
 // the treatment has applied — it never observes the transient flash. To

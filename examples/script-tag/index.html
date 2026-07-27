@@ -165,6 +165,33 @@
       <pre>{ "type": "redirect", "url": "/some-other-page" }</pre>
     </section>
 
+    <section id="goal-targets-section">
+      <h2>9. goals — auto-tracked clicks and form submits</h2>
+      <p>
+        Goals configured in your dashboard arrive on
+        <code>/experiments/active</code> and flame registers a DOM listener for each
+        <code>click</code> / <code>submit</code> one. When an interaction matches the goal's
+        selector, flame fires an event <em>named after the goal</em> — which is what the backend
+        matches conversions on. (<code>pageview</code> goals need no listener; <code>custom</code>
+        goals are fired by your own <code>flame.track()</code> call.)
+      </p>
+
+      <form id="checkout-form" onsubmit="return false">
+        <button type="submit">Complete checkout</button>
+        <pre>{ "name": "checkout_complete", "type": "submit", "selector": "#checkout-form" }</pre>
+      </form>
+
+      <button class="add-to-cart-cta" type="button">Add to cart</button>
+      <pre>{ "name": "cart_add_clicked", "type": "click", "selector": ".add-to-cart-cta" }</pre>
+
+      <button id="open-ticket" type="button">Open support ticket</button>
+      <pre>{ "name": "support_ticket_opened", "type": "click", "selector": "#open-ticket" }</pre>
+
+      <p id="untracked-copy">
+        Plain copy with no goal pointing at it — clicking here fires nothing.
+      </p>
+    </section>
+
     <section class="controls">
       <h2>Controls</h2>
       <p>

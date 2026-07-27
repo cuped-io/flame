@@ -8,6 +8,40 @@
  * `node mock-server/api.mjs` can import it directly.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Goals exactly as cuped's `/experiments/active` serves them.
+ *
+ * This file is a **golden instance** with a byte-identical twin in the
+ * ember repo (`crates/ember-core/tests/contracts/experiments_active_goals.json`),
+ * where a test asserts the endpoint emits precisely this for a known
+ * goal configuration. Here it goes the other way: the mock API serves
+ * it, and `tests/script-tag.spec.ts` drives real Chromium interactions
+ * against `examples/script-tag/index.html` to prove the SDK turns this
+ * payload into fired events.
+ *
+ * Why the pairing exists: cuped-io/ember#171. Goals moved to
+ * project-scoped tables server-side, the SDK payload kept serializing a
+ * legacy column, and browsers got `"goals": null` — every
+ * dashboard-created click/submit goal recorded zero conversions,
+ * silently. Both suites were green throughout: ember asserted the
+ * endpoint returned experiments, and this suite asserted auto-tracking
+ * worked — against a fixture that carried `goals: []`. Nothing pinned
+ * the shape they exchanged.
+ *
+ * Read from disk rather than inlined so the twin can be diffed byte for
+ * byte. Editing it means editing both copies, and the selectors below
+ * must keep matching elements in the script-tag example page.
+ */
+export const CONTRACT_GOALS = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL('./experiments-active-goals.contract.json', import.meta.url)),
+    'utf8'
+  )
+);
+
 /** 32-char hex DSN key. `parseDsn` rejects anything else. */
 export const TEST_API_KEY = '0123456789abcdef0123456789abcdef';
 
@@ -26,6 +60,10 @@ export const TEST_DSN = `http://${TEST_API_KEY}@localhost:${PORTS.api}`;
  * each non-redirect type, targeting the selectors baked into
  * `examples/script-tag/index.html`. (redirect is omitted on purpose —
  * it would navigate the page away mid-test.)
+ *
+ * Its `goals` are the shared contract instance — the same JSON cuped
+ * emits — so the auto-tracker specs exercise the real payload rather
+ * than a shape invented here. See `CONTRACT_GOALS`.
  */
 export const SCRIPT_TAG_EXPERIMENT = {
   id: 'exp_script_tag',
@@ -35,7 +73,7 @@ export const SCRIPT_TAG_EXPERIMENT = {
   status: 'running',
   created_at: '2026-01-01T00:00:00.000Z',
   updated_at: '2026-01-01T00:00:00.000Z',
-  goals: [],
+  goals: CONTRACT_GOALS,
   variants: [
     {
       id: 'var_script_control',

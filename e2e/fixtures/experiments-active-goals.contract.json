@@ -1,0 +1,22 @@
+[
+  {
+    "name": "checkout_complete",
+    "type": "submit",
+    "selector": "#checkout-form"
+  },
+  {
+    "name": "cart_add_clicked",
+    "type": "click",
+    "selector": ".add-to-cart-cta"
+  },
+  {
+    "name": "pricing_viewed",
+    "type": "pageview",
+    "url_pattern": "/pricing/*"
+  },
+  {
+    "name": "support_ticket_opened",
+    "type": "click",
+    "selector": "#open-ticket"
+  }
+]
