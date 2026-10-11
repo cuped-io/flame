@@ -1,5 +1,25 @@
 # @cuped-io/flame
 
+## 0.6.0
+
+### Minor Changes
+
+- a97adb2: Consent support. With `requireConsent: true` (script tag: `data-consent="required"`), flame does nothing until `flame.consent(true)`: no ID, no storage, no network, and the original page shows. Accepting assigns and applies the variant on the current page and starts tracking. `consentApply: 'next-page'` (`data-consent-apply="next-page"`) waits for the next page load instead, which excludes single-page apps and single landing pages. `flame.consent(false)` sends nothing more: queued events are dropped, not sent, and the stored ID, assignments and retry queue are deleted. The choice is remembered on later pages. A browser Global Privacy Control or Do Not Track signal keeps flame off, and `consent(true)` then returns `'blocked_by_signal'` and logs why. `flame.consentState()` reports where things stand. Experiments measure consenting visitors only.
+- 121c2d7: E-commerce auto-detection (add to cart, checkout and similar clicks) is now opt-in. Turn it on with `autoEcommerce: true` in `init()`, or with `data-ecommerce="true"` on the script tag. It was on for every site, its selectors could match unrelated buttons, and every match is a billable event.
+- 4a39616: On server-rendered React sites, flame now waits for React to hydrate an element before applying a variant to it. Applying earlier made React throw error #418 (hydration mismatch) in your app and discard the variant. This is automatic on Next.js, Remix, React Router 7 and Gatsby. For other React server-rendered pages, add `data-wait-for-hydration="true"` to the script tag (or `waitForHydration: true` in `init()`); `"false"` turns it off. If hydration has not happened within 5 seconds, flame applies anyway.
+- 91a50b5: Serve promoted winners. `/experiments/active` now lists concluded experiments whose winner was promoted under `promoted`, and the SDK applies each winner's changes through the same anti-flicker path as running experiments. It asks `/assign` for each one on every page load, so held-out visitors keep the original experience, and it ignores any stored assignment for that experiment without overwriting it, so a reverted promotion puts visitors back in their original variant. Promoted experiments attach nothing to events and register no goals. Previously a promoted experiment dropped out of `experiments` and every visitor reverted to the original. Edge-prehydrated (`@cuped-io/flame-edge`) pages don't serve promoted winners yet.
+- 1ffb050: Variants now survive single-page-app navigation and framework re-renders. flame keeps watching the page after the first apply. When an element a variant targets is re-created (for example, after navigating away and back within the app), flame applies the variant to it again. Your site's own later changes to an element flame already changed are left alone. Redirects are never re-applied. If the page keeps re-creating an element every time flame changes it, flame stops after 10 times in a second and logs why, so the two never fight. Turn it off with `data-reapply="false"` on the script tag, or `reapplyOnChange: false` in `init()`.
+
+### Patch Changes
+
+- 711785b: Handle `/assign` answers with no variant — held out, workspace at its event cap, or workspace archived — as a normal outcome: render the original, attach no assignment to events, surface no error or warning, and don't persist the refusal to localStorage. `@cuped-io/flame-edge` leaves such experiments out of the prehydrated cookie.
+
+  **Behavior change in `@cuped-io/flame-react`:** `<Experiment>` now renders its `fallback` only while loading. Once loaded, a user in no variant (held out, or not enrolled) gets `variants.control` — previously they kept seeing `fallback` indefinitely.
+
+- 121c2d7: `identify()` and `clearIdentity()` now switch the user on the existing tracker instead of replacing it. Previously, after `identify()` the old click and submit listeners kept firing under the device ID and the new tracker never auto-tracked, so one visitor could count as two. After `clearIdentity()`, events kept the logged-in user's ID.
+- 121c2d7: One failing experiment no longer stops the others. A failed assignment request or an invalid CSS selector now affects only that experiment: the rest still apply, the pageview is still tracked, and an anti-flicker page is always revealed instead of waiting for its timeout.
+- 121c2d7: A redirect variant no longer redirects again when the visitor is already on its destination page. Previously it looped. On the destination page, the variant's other changes now apply.
+
 ## 0.5.0
 
 ### Minor Changes
