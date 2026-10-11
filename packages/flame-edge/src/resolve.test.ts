@@ -240,6 +240,147 @@ describe('resolveAssignments', () => {
   });
 });
 
+describe('resolveAssignments — retrying refusals that can lift', () => {
+  // A cap or an archive lifts (upgrade, billing reset, revive); a Holdout
+  // doesn't. So a capped/archived refusal is asked again after a while,
+  // a held-out one never is.
+  const T0 = 1_700_000_000;
+  const RETRY_AFTER = 10 * 60;
+
+  const ASSIGNED = {
+    assignment_id: 'a-1',
+    experiment_id: 'exp-1',
+    variant_id: 'var-A',
+    variant_name: 'green',
+    is_control: false,
+    assigned_at: '2024-01-01T00:00:00Z',
+    held_out: false,
+    cap_reached: false,
+    workspace_archived: false,
+  };
+  const REFUSED = {
+    ...ASSIGNED,
+    assignment_id: null,
+    variant_id: null,
+    variant_name: null,
+    is_control: null,
+    assigned_at: null,
+  };
+  const CAPPED = { ...REFUSED, cap_reached: true };
+  const HELD_OUT = { ...REFUSED, held_out: true };
+
+  const json = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
+
+  function cookieFrom(setCookie: string | undefined): string {
+    expect(setCookie).toBeDefined();
+    return setCookie!.split(';')[0];
+  }
+
+  /** Cold-resolve one user whose assign answer is `assign`; return their cookie. */
+  async function coldResolve(assign: unknown): Promise<string> {
+    vi.stubGlobal('fetch', mockFetch([json({ experiments: [exp1] }), json(assign)]));
+    const result = await resolveAssignments({
+      dsn: DSN,
+      request: makeRequest(),
+      secret: SECRET,
+      userId: 'edge-user-1',
+      now: T0,
+    });
+    return cookieFrom(result.setCookie);
+  }
+
+  function resolveWith(cookie: string, now: number) {
+    return resolveAssignments({
+      dsn: DSN,
+      request: makeRequest({ cookie }),
+      secret: SECRET,
+      now,
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not ask again before the retry time', async () => {
+    const cookie = await coldResolve(CAPPED);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await resolveWith(cookie, T0 + RETRY_AFTER - 1);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.prehydrated?.assignments).toEqual({});
+    expect(result.setCookie).toBeUndefined();
+  });
+
+  it('asks again after the retry time and enrolls the same user', async () => {
+    const cookie = await coldResolve(CAPPED);
+    const fetchMock = mockFetch([json(ASSIGNED)]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await resolveWith(cookie, T0 + RETRY_AFTER);
+
+    // Only the refused experiment is asked about, not the active list.
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/experiments\/exp-1\/assign$/);
+    expect(JSON.parse(String(init?.body))).toEqual({ user_id: 'edge-user-1' });
+
+    expect(result.prehydrated?.user_id).toBe('edge-user-1');
+    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
+
+    // Enrolled now, so the new cookie has nothing left to retry.
+    const later = vi.fn();
+    vi.stubGlobal('fetch', later);
+    await resolveWith(cookieFrom(result.setCookie), T0 + 10 * RETRY_AFTER);
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('pushes the retry time back when still refused', async () => {
+    const cookie = await coldResolve(CAPPED);
+    vi.stubGlobal('fetch', mockFetch([json(CAPPED)]));
+    const retried = await resolveWith(cookie, T0 + RETRY_AFTER);
+    expect(retried.prehydrated?.assignments).toEqual({});
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await resolveWith(cookieFrom(retried.setCookie), T0 + 2 * RETRY_AFTER - 1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps serving the cookie when the retry fails, and backs off', async () => {
+    const cookie = await coldResolve(CAPPED);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('econnrefused')))
+    );
+
+    const result = await resolveWith(cookie, T0 + RETRY_AFTER);
+
+    expect(result.prehydrated?.user_id).toBe('edge-user-1');
+    expect(result.prehydrated?.experiments).toEqual([exp1]);
+    expect(result.prehydrated?.assignments).toEqual({});
+
+    // With the API down, the next request must not pay another timeout.
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await resolveWith(cookieFrom(result.setCookie), T0 + 2 * RETRY_AFTER - 1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('never asks again for a held-out user', async () => {
+    const cookie = await coldResolve(HELD_OUT);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await resolveWith(cookie, T0 + 100 * RETRY_AFTER);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.prehydrated?.assignments).toEqual({});
+  });
+});
+
 describe('readPrehydratedFromCookieHeader', () => {
   it('returns null for missing cookie', async () => {
     expect(await readPrehydratedFromCookieHeader(null, SECRET)).toBeNull();

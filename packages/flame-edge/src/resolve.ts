@@ -1,7 +1,9 @@
-import type { PrehydratedState } from '@cuped-io/flame';
+import type { PrehydratedState, StoredAssignment } from '@cuped-io/flame';
 import {
   signPrehydrated,
   verifyAndDecode,
+  verifyAndDecodePayload,
+  type RetryState,
   buildCookieHeader,
   parseCookieHeader,
   DEFAULT_COOKIE_NAME,
@@ -63,92 +65,139 @@ function genUserId(): string {
 }
 
 /**
+ * How long a declined assignment (event cap, archived workspace) waits
+ * before the edge asks again. A cap or an archive lifts on upgrade,
+ * billing reset or revive, so it must not stick for the cookie's life.
+ */
+const DECLINED_RETRY_SECONDS = 10 * 60;
+
+/**
  * Resolve assignments for the incoming request.
  *
  * Behavior:
- * 1. If a valid signed cookie is present, decode and return.
+ * 1. If a valid signed cookie is present, decode and return. If it
+ *    lists declined experiments whose retry time has passed, ask
+ *    `/assign` again for just those (same user), and re-sign.
  * 2. Otherwise, fetch active experiments + assign the user, sign a
  *    new cookie, and return both.
  * 3. On network error / timeout / unverifiable cookie, return
  *    `{ prehydrated: null }`. The caller should still serve the
  *    response; client-side init will recover.
+ *
+ * A held-out user is resolved like an assigned one: the experiment is
+ * left out of `assignments`, so the original renders, and it is never
+ * asked about again for the cookie's life.
  */
 export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveResult> {
   const cookieName = opts.cookieName ?? DEFAULT_COOKIE_NAME;
   const ttl = opts.cookieTtlSeconds ?? DEFAULT_COOKIE_TTL_SECONDS;
   const timeoutMs = opts.timeoutMs ?? 1500;
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
 
   const cookies = parseCookieHeader(opts.request.headers.get('cookie'));
 
-  // 1. Cookie present + valid → return.
+  // 1. Cookie present + valid → return, unless declined ones are due a retry.
   const existing = cookies[cookieName];
-  if (existing) {
-    const state = await verifyAndDecode(existing, opts.secret, { now: opts.now });
-    if (state) {
-      return { prehydrated: state };
-    }
-    // Fall through: cookie is malformed/expired; replace it.
+  const payload = existing ? await verifyAndDecodePayload(existing, opts.secret, { now }) : null;
+  if (payload && (!payload.retry || now < payload.retry.at)) {
+    return { prehydrated: payload.state };
   }
+  // Otherwise: no cookie, a malformed/expired one (replace it), or a
+  // retry is due.
 
-  // 2. Cold resolve: hit the cuped API.
   const { apiKey, apiUrl } = parseDsn(opts.dsn);
-  const userId = opts.userId ?? genUserId();
-  const userIdCreatedAt = new Date((opts.now ?? Date.now() / 1000) * 1000).toISOString();
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchOpts = { apiUrl, apiKey, signal: controller.signal };
+
+  const sign = async (state: PrehydratedState, retryIds: string[]) => {
+    const retry: RetryState | undefined = retryIds.length
+      ? { experiment_ids: retryIds, at: now + DECLINED_RETRY_SECONDS }
+      : undefined;
+    const cookieValue = await signPrehydrated(state, opts.secret, { ttlSeconds: ttl, now, retry });
+    return buildCookieHeader(cookieValue, { name: cookieName, ttlSeconds: ttl });
+  };
 
   try {
-    const experiments = await fetchActiveExperiments({
-      apiUrl,
-      apiKey,
-      signal: controller.signal,
-    });
+    if (payload?.retry) {
+      // Ask again for just the declined experiments, as the same user.
+      const { state, retry } = payload;
+      const pending = retry.experiment_ids.filter((id) =>
+        state.experiments.some((e) => e.id === id)
+      );
+      const resolved = await assignAll(pending, state.user_id, fetchOpts);
+      const next: PrehydratedState = {
+        ...state,
+        assignments: { ...state.assignments, ...resolved.assignments },
+      };
+      return { prehydrated: next, setCookie: await sign(next, resolved.retry) };
+    }
 
-    // Assign in parallel.
-    const assignmentEntries = await Promise.all(
-      experiments.map(async (exp) => {
-        try {
-          const assignment = await assignVariant({
-            apiUrl,
-            apiKey,
-            experimentId: exp.id,
-            userId,
-            signal: controller.signal,
-          });
-          // In no variant: leave it out, so the page renders the original.
-          return assignment ? ([exp.id, assignment] as const) : null;
-        } catch {
-          // One bad experiment shouldn't kill the whole resolution.
-          return null;
-        }
-      })
-    );
+    // 2. Cold resolve: hit the cuped API.
+    const userId = opts.userId ?? genUserId();
+    const userIdCreatedAt = new Date(now * 1000).toISOString();
 
-    const assignments = Object.fromEntries(
-      assignmentEntries.filter((x): x is NonNullable<typeof x> => x !== null)
+    const experiments = await fetchActiveExperiments(fetchOpts);
+    const resolved = await assignAll(
+      experiments.map((e) => e.id),
+      userId,
+      fetchOpts
     );
 
     const state: PrehydratedState = {
       user_id: userId,
       user_id_created_at: userIdCreatedAt,
       experiments,
-      assignments,
+      assignments: resolved.assignments,
     };
-
-    const cookieValue = await signPrehydrated(state, opts.secret, {
-      ttlSeconds: ttl,
-      now: opts.now,
-    });
-    const setCookie = buildCookieHeader(cookieValue, { name: cookieName, ttlSeconds: ttl });
-
-    return { prehydrated: state, setCookie };
+    return { prehydrated: state, setCookie: await sign(state, resolved.retry) };
   } catch {
     // Timed out or upstream error — let the client recover.
     return { prehydrated: null };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Assign `userId` to each experiment in parallel. Held-out experiments
+ * are left out of `assignments` for good; declined and failed ones are
+ * left out too but listed in `retry`, to ask about again later. One bad
+ * experiment never sinks the rest.
+ */
+async function assignAll(
+  experimentIds: string[],
+  userId: string,
+  fetchOpts: { apiUrl: string; apiKey: string; signal: AbortSignal }
+): Promise<{
+  assignments: Record<string, StoredAssignment>;
+  retry: string[];
+}> {
+  const outcomes = await Promise.all(
+    experimentIds.map(async (experimentId) => {
+      try {
+        return {
+          experimentId,
+          outcome: await assignVariant({ ...fetchOpts, experimentId, userId }),
+        };
+      } catch {
+        return { experimentId, outcome: null };
+      }
+    })
+  );
+
+  const assignments: Record<string, StoredAssignment> = {};
+  const retry: string[] = [];
+  for (const { experimentId, outcome } of outcomes) {
+    if (outcome?.kind === 'assigned') {
+      assignments[experimentId] = outcome.assignment;
+    } else if (outcome?.kind !== 'held_out') {
+      // Declined, or the call failed: ask again later.
+      retry.push(experimentId);
+    }
+  }
+  return { assignments, retry };
 }
 
 /**

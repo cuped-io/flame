@@ -19,6 +19,19 @@ export interface SignedPayload {
   exp: number;
   /** The data flame.init consumes. */
   state: PrehydratedState;
+  /**
+   * Experiments whose assignment was declined (event cap, archived
+   * workspace) or whose `/assign` call failed, to ask about again from
+   * `at` (seconds since epoch). Edge-only: never reaches flame. Absent
+   * when nothing is pending.
+   */
+  retry?: RetryState;
+}
+
+/** Experiments to ask `/assign` about again, and when. */
+export interface RetryState {
+  experiment_ids: string[];
+  at: number;
 }
 
 /** Default cookie name. */
@@ -78,7 +91,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 export async function signPrehydrated(
   state: PrehydratedState,
   secret: string,
-  opts: { ttlSeconds?: number; now?: number } = {}
+  opts: { ttlSeconds?: number; now?: number; retry?: RetryState } = {}
 ): Promise<string> {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const ttl = opts.ttlSeconds ?? DEFAULT_COOKIE_TTL_SECONDS;
@@ -87,6 +100,7 @@ export async function signPrehydrated(
     iat: now,
     exp: now + ttl,
     state,
+    ...(opts.retry ? { retry: opts.retry } : {}),
   };
   const json = encoder.encode(JSON.stringify(payload));
   const key = await importHmacKey(secret, 'sign');
@@ -106,6 +120,18 @@ export async function verifyAndDecode(
   secret: string,
   opts: { now?: number } = {}
 ): Promise<PrehydratedState | null> {
+  return (await verifyAndDecodePayload(cookieValue, secret, opts))?.state ?? null;
+}
+
+/**
+ * Like {@link verifyAndDecode}, but returns the whole signed payload
+ * (including edge-only fields such as `retry`).
+ */
+export async function verifyAndDecodePayload(
+  cookieValue: string,
+  secret: string,
+  opts: { now?: number } = {}
+): Promise<SignedPayload | null> {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const dot = cookieValue.indexOf('.');
   if (dot < 0) return null;
@@ -148,7 +174,7 @@ export async function verifyAndDecode(
   }
   if (parsed.v !== 1) return null;
   if (parsed.exp < now) return null;
-  return parsed.state;
+  return parsed;
 }
 
 /**

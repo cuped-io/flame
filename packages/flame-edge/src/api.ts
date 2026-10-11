@@ -64,14 +64,28 @@ export async function fetchActiveExperiments(opts: FetchOpts): Promise<Experimen
 }
 
 /**
- * Assign the user to a variant. Resolves `null` when the user is in no
- * variant — held out, workspace capped or archived — which means "render
- * the original". That is an answer, not a failure. Mirrors
+ * Outcome of an `/assign` call.
+ *
+ * - `assigned`: the user is in a variant.
+ * - `held_out`: the user is in the project's Holdout. Lasting — never
+ *   worth asking again.
+ * - `declined`: the workspace is at its event cap or archived. Renders
+ *   the original like `held_out`, but lifts on upgrade, billing reset or
+ *   revive, so it is worth asking again later.
+ */
+export type AssignOutcome =
+  | { kind: 'assigned'; assignment: StoredAssignment }
+  | { kind: 'held_out' }
+  | { kind: 'declined' };
+
+/**
+ * Assign the user to a variant. A no-variant answer is an answer, not a
+ * failure: it resolves to `held_out` or `declined`, never throws. Mirrors
  * `getOrCreateAssignment` in `@cuped-io/flame`; keep the two in step.
  */
 export async function assignVariant(
   opts: FetchOpts & { experimentId: string; userId: string }
-): Promise<StoredAssignment | null> {
+): Promise<AssignOutcome> {
   const res = await fetch(`${opts.apiUrl}/${opts.apiKey}/experiments/${opts.experimentId}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -82,14 +96,20 @@ export async function assignVariant(
     throw new Error(`assign failed for ${opts.experimentId}: ${res.status}`);
   }
   const body = (await res.json()) as AssignResponse;
-  if (body.held_out || body.cap_reached || body.workspace_archived || body.variant_id === null) {
-    return null;
+  if (body.held_out) return { kind: 'held_out' };
+  // A null variant with no flag set is an arm this version doesn't know;
+  // treat it as one that may lift.
+  if (body.cap_reached || body.workspace_archived || body.variant_id === null) {
+    return { kind: 'declined' };
   }
   return {
-    experimentId: body.experiment_id,
-    variantId: body.variant_id,
-    userId: opts.userId,
-    // `null` for a promoted winner, which writes no assignment row.
-    assignedAt: body.assigned_at ?? new Date().toISOString(),
+    kind: 'assigned',
+    assignment: {
+      experimentId: body.experiment_id,
+      variantId: body.variant_id,
+      userId: opts.userId,
+      // `null` for a promoted winner, which writes no assignment row.
+      assignedAt: body.assigned_at ?? new Date().toISOString(),
+    },
   };
 }

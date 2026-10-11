@@ -126,6 +126,8 @@ const prehydrated = await readPrehydratedFromCookieHeader(
 - Repeat visit → read signed cookie → skip API roundtrip → render correct variant
 - Tampered/expired cookies → reject and re-resolve
 - Network failure → graceful degradation to client-side init
+- Held-out user → render the original, for the life of the cookie
+- Workspace at its event cap or archived → render the original, and ask again (same user) every 10 minutes, so enrollment resumes soon after an upgrade, billing reset or revive. A per-experiment API failure is retried the same way.
 
 ## Peer dependencies
 

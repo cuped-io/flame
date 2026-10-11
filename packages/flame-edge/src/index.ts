@@ -24,6 +24,7 @@ export {
   DEFAULT_COOKIE_NAME,
   DEFAULT_COOKIE_TTL_SECONDS,
   type SignedPayload,
+  type RetryState,
 } from './cookie';
 
 export {
