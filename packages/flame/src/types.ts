@@ -56,6 +56,13 @@ export interface FlameConfig {
    */
   waitForHydration?: boolean;
   /**
+   * Keep watching the page after the first apply, and apply a variant to a
+   * target that appears without it: a framework re-created it (a remount,
+   * client-side navigation). Default true (flame#45). Script tag:
+   * `data-reapply="false"` turns it off.
+   */
+  reapplyOnChange?: boolean;
+  /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
    * skips the HTTP fetch and uses these directly. Produced by
    * `@cuped-io/flame-edge` for SSR zero-flash; the React SDK forwards

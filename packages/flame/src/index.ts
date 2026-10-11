@@ -28,6 +28,7 @@ import {
   reactSsrDetected,
   targetsHydrated,
 } from './hydration';
+import { watchForFreshTargets } from './reapply';
 import {
   initialConsentState,
   consentAllowsRunning,
@@ -61,6 +62,7 @@ class Flame {
   private consentStatus: ConsentState = 'not_required';
   private applyAfterReveal = false;
   private hydrationWaitStart: number | null = null;
+  private domWatcher: { stop: () => void } | null = null;
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
   private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
@@ -131,6 +133,9 @@ class Flame {
    * before this call cannot be recalled.
    */
   private withdraw(): ConsentState {
+    // No more page changes after withdrawal, promoted winners included (#45).
+    this.domWatcher?.stop();
+    this.domWatcher = null;
     this.trackingManager?.discard();
     this.trackingManager = null;
     this.pendingEvents = [];
@@ -382,6 +387,20 @@ class Flame {
     } finally {
       af?.reveal();
     }
+
+    this.watchForFreshTargets();
+  }
+
+  /**
+   * After the first apply, re-apply a variant when one of its targets appears
+   * without flame's data-flame-modified marker: a framework re-created it (a
+   * remount, client-side navigation away and back), so it lost the variant
+   * (flame#45).
+   */
+  private watchForFreshTargets(): void {
+    if (this.config?.reapplyOnChange === false) return;
+    if (this.domWatcher || typeof MutationObserver === 'undefined') return;
+    this.domWatcher = watchForFreshTargets(() => this.activeVariants(), this.config?.debug);
   }
 
   /** The opt-in when set; otherwise whether the page is React SSR. */
@@ -389,9 +408,9 @@ class Flame {
     return this.config?.waitForHydration ?? reactSsrDetected();
   }
 
-  /** The selectors the assigned variants and promoted winners change. */
-  private targetSelectors(): string[] {
-    const variants = [
+  /** The assigned variants and promoted winners this visitor sees. */
+  private activeVariants(): Variant[] {
+    return [
       ...this.experiments.flatMap((experiment) => {
         const assignment = this.assignments.get(experiment.id);
         const variant = assignment && getAssignedVariant(experiment, assignment);
@@ -399,7 +418,11 @@ class Flame {
       }),
       ...this.promotedWinners,
     ];
-    return variants.flatMap((v) =>
+  }
+
+  /** The selectors the assigned variants and promoted winners change. */
+  private targetSelectors(): string[] {
+    return this.activeVariants().flatMap((v) =>
       (v.changes ?? []).flatMap((c) => ('selector' in c ? [c.selector] : []))
     );
   }
@@ -578,6 +601,8 @@ class Flame {
    * Reset all assignments and rollback changes
    */
   reset(): void {
+    this.domWatcher?.stop();
+    this.domWatcher = null;
     rollbackChanges();
     this.trackingManager?.stopAutoTracking();
     this.assignments.clear();
@@ -623,7 +648,16 @@ function autoInit(): void {
   const hydrationAttr = scriptElement.getAttribute('data-wait-for-hydration');
   const waitForHydration =
     hydrationAttr === 'true' ? true : hydrationAttr === 'false' ? false : undefined;
-  flame.init({ dsn, debug, autoEcommerce, requireConsent, consentApply, waitForHydration });
+  const reapplyOnChange = scriptElement.getAttribute('data-reapply') !== 'false';
+  flame.init({
+    dsn,
+    debug,
+    autoEcommerce,
+    requireConsent,
+    consentApply,
+    waitForHydration,
+    reapplyOnChange,
+  });
 }
 
 // Run auto-init

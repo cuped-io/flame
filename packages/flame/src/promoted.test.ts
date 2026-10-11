@@ -81,6 +81,15 @@ function storedAssignments(): Record<string, StoredAssignment> {
 
 const headline = () => document.getElementById('headline')?.textContent;
 
+// Each test's instances watch the shared document (flame#45), so stop them
+// after the test, as a page has only one.
+const instances: Flame[] = [];
+function newFlame(): Flame {
+  const f = new Flame();
+  instances.push(f);
+  return f;
+}
+
 describe('flame.init() with a promoted winner', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -89,26 +98,27 @@ describe('flame.init() with a promoted winner', () => {
   });
 
   afterEach(() => {
+    instances.splice(0).forEach((f) => f.reset());
     delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
   });
 
   it('applies the winner when /assign names it', async () => {
     stubApi(WINNER);
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(headline()).toBe('Promoted winner text');
   });
 
   it('renders the original for a held-out visitor', async () => {
     stubApi(HELD_OUT);
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(headline()).toBe('Original headline');
   });
 
   it('renders the original when /assign names some other variant', async () => {
     stubApi({ ...WINNER, variant_id: 'variant-loser', variant_name: 'Control' });
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(headline()).toBe('Original headline');
   });
@@ -117,7 +127,7 @@ describe('flame.init() with a promoted winner', () => {
     localStorage.setItem('flame_assignments', JSON.stringify({ 'exp-promoted': STORED_LOSER }));
     const fetchMock = stubApi(WINNER);
 
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(assignCalls(fetchMock)).toBe(1);
     expect(headline()).toBe('Promoted winner text');
@@ -128,15 +138,15 @@ describe('flame.init() with a promoted winner', () => {
 
   it('stores nothing for the winner', async () => {
     stubApi(WINNER);
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(storedAssignments()['exp-promoted']).toBeUndefined();
   });
 
   it('asks /assign on every page load', async () => {
     const fetchMock = stubApi(WINNER);
-    await new Flame().init({ dsn: DSN });
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(assignCalls(fetchMock)).toBe(2);
   });
@@ -146,7 +156,7 @@ describe('flame.init() with a promoted winner', () => {
     const registerGoals = vi.spyOn(TrackingManager.prototype, 'registerGoals');
     stubApi(WINNER);
 
-    const flame = new Flame();
+    const flame = newFlame();
     await flame.init({ dsn: DSN });
 
     // The experiment is concluded: its results are frozen.
@@ -165,14 +175,14 @@ describe('flame.init() with a promoted winner', () => {
     };
     stubApi(WINNER);
 
-    await new Flame().init({ dsn: DSN });
+    await newFlame().init({ dsn: DSN });
 
     expect(reveal).toHaveBeenCalledOnce();
   });
 
   it('renders the original and still initializes when /assign fails', async () => {
     stubApi(() => new Response('boom', { status: 500 }));
-    const flame = new Flame();
+    const flame = newFlame();
     await flame.init({ dsn: DSN });
 
     expect(headline()).toBe('Original headline');
@@ -184,7 +194,7 @@ describe('flame.init() with a promoted winner', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ experiments: [] }), { status: 200 }))
     );
-    const flame = new Flame();
+    const flame = newFlame();
     await flame.init({ dsn: DSN });
 
     expect(flame.isInitialized()).toBe(true);

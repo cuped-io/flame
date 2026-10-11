@@ -11,9 +11,8 @@ import { resetEvents } from './helpers';
  * headline!"). Each case records what happened via test annotations and the
  * PROBE log line; the assertions encode the outcome measured on 2026-10-11.
  *
- * One assertion pins a KNOWN DEFECT as it behaves today (flame#45): when it
- * is fixed, that assertion fails on purpose; flip it then. The "reverse
- * order" case without the opt-in is the documented limit of flame#44.
+ * The "reverse order" case without the opt-in is the documented limit of
+ * flame#44: hand-built React SSR with no framework fingerprint.
  */
 
 const PAGE = 'http://localhost:8789/e2e/probe-react/dist/index.html';
@@ -64,9 +63,9 @@ test('default order: React hydrates, then flame applies', async ({ page }) => {
   await page.click('#navigate');
   await page.waitForTimeout(300);
   record('after client-side navigate away and back', await headline(page));
-  // KNOWN DEFECT flame#45: flame applies only at init, so a remount loses
-  // the variant. Flip to TREATMENT when #45 is fixed.
-  expect(await headline(page)).toBe(ORIGINAL);
+  // flame#45: flame watches the page and re-applies to a target React
+  // re-created, so client-side navigation away and back keeps the variant.
+  expect(await headline(page)).toBe(TREATMENT);
 });
 
 test('reverse order: flame applies, then React hydrates', async ({ page }) => {
@@ -82,12 +81,18 @@ test('reverse order: flame applies, then React hydrates', async ({ page }) => {
   await page.waitForTimeout(500);
   record('after hydration', await headline(page));
   record('hydration errors', await hydrationErrors(page));
-  // Precondition: flame really applied before React took over.
-  // By design since flame#44: this probe page is hand-built React SSR with no
-  // framework fingerprint and no data-wait-for-hydration opt-in, so flame
-  // cannot know hydration is coming, and React throws #418 and discards the
-  // variant. The opt-in case below is the fix; framework pages auto-detect.
-  expect(await headline(page)).toBe(ORIGINAL);
+  // The documented limit of flame#44: this probe page is hand-built React SSR
+  // with no framework fingerprint and no data-wait-for-hydration opt-in, so
+  // flame cannot know hydration is coming. React still throws #418 and
+  // re-creates the element; since flame#45 the watcher re-applies to it, so
+  // the variant survives, but the error is logged. Only the opt-in (case
+  // below) or a detected framework prevents the error.
+  await page
+    .waitForFunction((t) => document.getElementById('target-text')?.textContent === t, TREATMENT, {
+      timeout: 3000,
+    })
+    .catch(() => {});
+  expect(await headline(page)).toBe(TREATMENT);
   expect((await hydrationErrors(page)).join(' ')).toContain('418');
 });
 
