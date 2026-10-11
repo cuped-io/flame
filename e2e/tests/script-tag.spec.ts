@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { resetEvents, getRecordedEvents, flushBeacons } from './helpers';
+// @ts-expect-error -- untyped .mjs fixture module
+import { PROMOTED_CONTRACT } from '../fixtures/experiments.mjs';
 
 const PAGE = 'http://localhost:8789/examples/script-tag/index.html';
 
@@ -271,4 +274,86 @@ test('assigns experiments concurrently, not one serial round-trip at a time', as
   await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
 
   expect(maxInFlight, 'the two /assign calls must overlap (parallel), not run serially').toBe(2);
+});
+
+// --- promoted winners (flame#42, cuped-io/ember#300) -----------------
+//
+// Promotion concludes an experiment, so ember moves it from `experiments`
+// to `promoted` — and a flame that only reads `experiments` silently
+// reverts every visitor to the original. These serve the shared contract
+// (`PROMOTED_CONTRACT`, the byte-identical twin of ember's golden
+// fixture) and assert the winner reaches the page.
+
+/**
+ * Serve the promoted contract from `/experiments/active`. The script-tag
+ * experiment is dropped because it targets `#target-text` too; the React
+ * experiment stays, so events still carry an assignment to compare with.
+ */
+async function servePromotedContract(page: Page): Promise<void> {
+  await page.route('**/experiments/active', async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { experiments: { id: string }[] };
+    await route.fulfill({
+      response,
+      json: {
+        experiments: body.experiments.filter((e) => e.id !== 'exp_script_tag'),
+        promoted: [PROMOTED_CONTRACT],
+      },
+    });
+  });
+}
+
+test('applies a promoted winner from the contract payload', async ({ page }) => {
+  await servePromotedContract(page);
+  await page.goto(PAGE);
+
+  await expect(page.locator('#target-text')).toHaveText('Promoted winner text');
+});
+
+test('keeps the original for a visitor held out of a promoted winner', async ({ page }) => {
+  await servePromotedContract(page);
+  await page.route(`**/experiments/${PROMOTED_CONTRACT.id}/assign`, (route) =>
+    route.fulfill({
+      json: {
+        assignment_id: null,
+        experiment_id: PROMOTED_CONTRACT.id,
+        variant_id: null,
+        variant_name: null,
+        is_control: null,
+        assigned_at: null,
+        held_out: true,
+      },
+    })
+  );
+  await page.goto(PAGE);
+
+  // Revealed on the original, not the winner.
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).opacity))
+    .toBe('1');
+  await expect(page.locator('#target-text')).toContainText('Original text content.');
+});
+
+test('sends no events for a promoted experiment', async ({ page, request }) => {
+  await servePromotedContract(page);
+  await page.goto(PAGE);
+  await expect(page.locator('#target-text')).toHaveText('Promoted winner text');
+
+  await page.getByRole('button', { name: 'Fire event' }).click();
+  await flushBeacons(page);
+
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('demo_button_clicked');
+
+  const events = await getRecordedEvents(request);
+  // Events do carry assignments — just never the concluded experiment's.
+  expect(events.find((e) => e.event_type === 'pageview')?.experiment_assignments).toContainEqual({
+    experiment_id: 'exp_react',
+    variant_id: 'var_react_treatment',
+  });
+  const experimentIds = events.flatMap(
+    (e) => e.experiment_assignments?.map((a) => a.experiment_id) ?? []
+  );
+  expect(experimentIds).not.toContain(PROMOTED_CONTRACT.id);
 });

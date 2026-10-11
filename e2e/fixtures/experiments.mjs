@@ -42,6 +42,25 @@ export const CONTRACT_GOALS = JSON.parse(
   )
 );
 
+/**
+ * One `promoted[]` entry exactly as cuped's `/experiments/active` serves
+ * it (cuped-io/ember#300, ADR 0039): a concluded experiment whose winner
+ * every visitor not held out should see. Byte-identical twin of ember's
+ * `crates/ember-core/tests/contracts/experiments_active_promoted.json`,
+ * paired the same way as `CONTRACT_GOALS`. Its winner targets
+ * `#target-text` on the script-tag example page.
+ *
+ * Not in the default `/experiments/active` response: it would fight the
+ * script-tag experiment over `#target-text`. Specs that want it splice it
+ * in with `page.route`.
+ */
+export const PROMOTED_CONTRACT = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL('./experiments-active-promoted.contract.json', import.meta.url)),
+    'utf8'
+  )
+);
+
 /** 32-char hex DSN key. `parseDsn` rejects anything else. */
 export const TEST_API_KEY = '0123456789abcdef0123456789abcdef';
 

@@ -13,12 +13,19 @@
  *   POST /_test/reset    -> clear recorded events
  *
  * Deterministic by design: everyone is assigned the treatment variant
- * (see `treatmentVariantFor`). Reachable by both the browser
+ * (see `treatmentVariantFor`). The promoted contract experiment
+ * answers with its winner. Reachable by both the browser
  * (script-tag example, cross-origin) and the Next.js server (edge
  * middleware, same-process fetch), so CORS is wide open.
  */
 import { createServer } from 'node:http';
-import { EXPERIMENTS, PORTS, TEST_API_KEY, treatmentVariantFor } from '../fixtures/experiments.mjs';
+import {
+  EXPERIMENTS,
+  PORTS,
+  PROMOTED_CONTRACT,
+  TEST_API_KEY,
+  treatmentVariantFor,
+} from '../fixtures/experiments.mjs';
 
 /** In-memory sink for every event the SDK POSTs to `/events`. */
 const recordedEvents = [];
@@ -94,6 +101,20 @@ const server = createServer(async (req, res) => {
   const assignMatch = rest.match(/^\/experiments\/([^/]+)\/assign$/);
   if (assignMatch && method === 'POST') {
     const experimentId = assignMatch[1];
+    // A promoted experiment answers with its winner and writes no
+    // assignment row, as ember's promotion short-circuit does.
+    if (experimentId === PROMOTED_CONTRACT.id) {
+      const { winner } = PROMOTED_CONTRACT;
+      send(res, 200, {
+        assignment_id: null,
+        experiment_id: experimentId,
+        variant_id: winner.id,
+        variant_name: winner.name,
+        is_control: winner.is_control,
+        assigned_at: null,
+      });
+      return;
+    }
     const variant = treatmentVariantFor(experimentId);
     if (!variant) {
       send(res, 404, { error: `unknown experiment ${experimentId}` });

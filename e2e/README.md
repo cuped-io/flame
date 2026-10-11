@@ -9,7 +9,7 @@ environment. Complements the packages' 260+ unit tests with a
 
 | Spec | Example | Asserts |
 |---|---|---|
-| `tests/script-tag.spec.ts` | `examples/script-tag` | Assignment applies across every non-redirect change type (`text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`); a `pageview` event and a `track()` event fire with the assignment attached; **goal auto-tracking** — a click goal, a submit goal and a project guardrail each fire an event named after the goal, and nothing fires for an unmatched click. |
+| `tests/script-tag.spec.ts` | `examples/script-tag` | Assignment applies across every non-redirect change type (`text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`); a `pageview` event and a `track()` event fire with the assignment attached; **goal auto-tracking** — a click goal, a submit goal and a project guardrail each fire an event named after the goal, and nothing fires for an unmatched click; **promoted winners** — the promoted contract's winner applies, a held-out visitor keeps the original, and no event carries the promoted experiment. |
 | `tests/next-app.spec.ts` | `examples/next-app` | Zero-flash SSR — the assigned variant is in the server HTML on a warm (cookie'd) visit; `useExperiment` / `<Experiment>` render the treatment; `useTrack` fires an event with the React assignment. |
 
 The script-tag "no flash" case is a `test.fixme` — the script-tag SDK
@@ -51,6 +51,17 @@ shared package or cross-repo CI. What's guaranteed is that neither side
 can move alone.) The selectors are load-bearing too: they match elements
 in `examples/script-tag/index.html`, so changing one means changing that
 page.
+
+## The promoted contract (cuped-io/ember#300, flame#42)
+
+`fixtures/experiments-active-promoted.contract.json` is the same kind of
+golden instance, for one entry of the `promoted` list
+`/experiments/active` serves alongside `experiments`. Its twin is
+ember's `crates/ember-core/tests/contracts/experiments_active_promoted.json`.
+The mock answers `/assign` for it with the winner and no assignment
+row. It is not in the default response (its winner targets
+`#target-text`, as the script-tag experiment's treatment does), so the
+promoted specs splice it in with `page.route`.
 
 ## How it works
 

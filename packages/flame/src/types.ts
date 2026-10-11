@@ -285,6 +285,29 @@ export interface Experiment {
  */
 export interface ActiveExperimentsResponse {
   experiments: Experiment[];
+  /**
+   * Concluded experiments whose winner was promoted (ember ADR 0039). An
+   * experiment is in exactly one of the two lists. Absent from older APIs.
+   */
+  promoted?: PromotedExperiment[];
+}
+
+/**
+ * A concluded experiment whose winning variant is served to everyone not
+ * held out. The SDK still asks `/assign` (the Holdout gate runs first) but
+ * tracks nothing for it: its results are frozen.
+ */
+export interface PromotedExperiment {
+  /** Experiment ID */
+  id: string;
+  /** Human-readable experiment name */
+  name: string;
+  /** URL-safe experiment slug */
+  slug: string;
+  /** Timestamp when the winner was promoted */
+  winner_promoted_at: string;
+  /** The promoted variant, whose changes every non-held-out visitor sees */
+  winner: Variant;
 }
 
 /**

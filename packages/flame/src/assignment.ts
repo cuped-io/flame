@@ -1,4 +1,10 @@
-import type { StoredAssignment, Experiment, IdentityMetadata } from './types';
+import type {
+  StoredAssignment,
+  Experiment,
+  IdentityMetadata,
+  PromotedExperiment,
+  Variant,
+} from './types';
 import type { UserContext } from './context';
 import type { ApiClient } from './api';
 
@@ -91,6 +97,34 @@ export async function getOrCreateAssignment(
   storeAssignment(assignment);
 
   return assignment;
+}
+
+/**
+ * Ask `/assign` whether this user sees a promoted experiment's winner.
+ *
+ * Always asks, never reads or writes the stored assignment: the Holdout gate
+ * runs before ember's promotion short-circuit, so only ember knows whether
+ * this user is held out, and a stored row may name a losing variant. Leaving
+ * that row alone means a reverted promotion puts the user back in it.
+ *
+ * @returns The winner, or `null` to render the original (held out, any
+ *   other answer, or the request failed).
+ */
+export async function resolvePromotedWinner(
+  promoted: PromotedExperiment,
+  userId: string,
+  apiClient: ApiClient,
+  context?: UserContext,
+  identity?: IdentityMetadata
+): Promise<Variant | null> {
+  try {
+    const response = await apiClient.assignVariant(promoted.id, userId, context, identity);
+    if (response.held_out || response.variant_id !== promoted.winner.id) return null;
+    return promoted.winner;
+  } catch {
+    // The original is always a safe answer; don't fail init over it.
+    return null;
+  }
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { FlameConfig, Experiment, StoredAssignment, IdentityMetadata, Variant } from './types';
 import type { UserContext } from './context';
 import { ApiClient } from './api';
-import { getOrCreateAssignment, getAssignedVariant } from './assignment';
+import { getOrCreateAssignment, getAssignedVariant, resolvePromotedWinner } from './assignment';
 import {
   getIdentity,
   identify as identifyUser,
@@ -31,6 +31,10 @@ class Flame {
   private context: UserContext | null = null;
   private experiments: Experiment[] = [];
   private assignments: Map<string, StoredAssignment> = new Map();
+  // Winners of promoted experiments this user sees. Applied to the DOM only:
+  // never registered for tracking, since a concluded experiment's results
+  // are frozen (flame#42).
+  private promotedWinners: Variant[] = [];
   private initialized = false;
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
@@ -123,17 +127,27 @@ class Flame {
         const userId = this.userId;
         const apiClient = this.apiClient;
         const context = this.context ?? undefined;
-        const resolved = await Promise.all(
-          this.experiments.map((experiment) =>
-            getOrCreateAssignment(experiment, userId, apiClient, context, identityMeta).then(
-              (assignment) => ({ experiment, assignment })
+        // Promoted winners resolve in the same parallel batch.
+        const [resolved, winners] = await Promise.all([
+          Promise.all(
+            this.experiments.map((experiment) =>
+              getOrCreateAssignment(experiment, userId, apiClient, context, identityMeta).then(
+                (assignment) => ({ experiment, assignment })
+              )
             )
-          )
-        );
+          ),
+          Promise.all(
+            (response.promoted ?? []).map((promoted) =>
+              resolvePromotedWinner(promoted, userId, apiClient, context, identityMeta)
+            )
+          ),
+        ]);
 
         for (const { experiment, assignment } of resolved) {
           this.registerExperiment(experiment, assignment);
         }
+        this.promotedWinners = winners.filter((winner): winner is Variant => winner !== null);
+        this.log(`Serving ${this.promotedWinners.length} promoted winners`);
       }
 
       // Register e-commerce auto-detection goals for all experiments
@@ -224,6 +238,10 @@ class Flame {
       if (!variant) continue;
 
       applyVariant(variant, this.config?.debug);
+    }
+
+    for (const winner of this.promotedWinners) {
+      applyVariant(winner, this.config?.debug);
     }
 
     af?.reveal();
@@ -419,6 +437,7 @@ class Flame {
     this.trackingManager?.stopAutoTracking();
     this.assignments.clear();
     this.experiments = [];
+    this.promotedWinners = [];
     this.initialized = false;
     this.log('Flame SDK reset');
   }
@@ -463,6 +482,7 @@ export type {
   FlameConfig,
   PrehydratedState,
   Experiment,
+  PromotedExperiment,
   Variant,
   VariantChange,
   TextChange,
