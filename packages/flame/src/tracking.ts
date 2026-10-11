@@ -164,6 +164,29 @@ export class TrackingManager {
   }
 
   /**
+   * Shut down for consent withdrawal (flame#18) and send nothing more.
+   * Unlike stopAutoTracking, which flushes first, this DROPS what is queued.
+   * Synchronous, so no unload or tab-hide flush can interleave; the order
+   * (disarm the flush triggers, drop the queue, delete the retry store) is
+   * insurance should an await ever be added.
+   */
+  discard(): void {
+    if (this.clickHandler) {
+      document.removeEventListener('click', this.clickHandler, true);
+      this.clickHandler = null;
+    }
+    if (this.submitHandler) {
+      document.removeEventListener('submit', this.submitHandler, true);
+      this.submitHandler = null;
+    }
+    if (this.queue) {
+      this.queue.stop();
+      this.queue.clear();
+      this.queue.getOfflineStorage()?.clear();
+    }
+  }
+
+  /**
    * Stop auto-tracking
    */
   stopAutoTracking(): void {

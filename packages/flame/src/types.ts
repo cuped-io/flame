@@ -35,6 +35,21 @@ export interface FlameConfig {
    */
   autoEcommerce?: boolean;
   /**
+   * Wait for the visitor's consent before doing anything (flame#18): no ID,
+   * no storage, no network, original page, until `flame.consent(true)`.
+   * Script tag: `data-consent="required"`.
+   */
+  requireConsent?: boolean;
+  /**
+   * When an accept takes effect (flame#18). `'immediate'` (default) assigns
+   * and applies the variant on the current page. `'next-page'` saves the
+   * grant and starts flame at the next document load. That effectively
+   * excludes single-page apps and single landing pages, where the next
+   * document load may never come in the same visit.
+   * Script tag: `data-consent-apply="next-page"`.
+   */
+  consentApply?: 'immediate' | 'next-page';
+  /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
    * skips the HTTP fetch and uses these directly. Produced by
    * `@cuped-io/flame-edge` for SSR zero-flash; the React SDK forwards

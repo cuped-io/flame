@@ -288,7 +288,7 @@ export class EventQueue {
   }
 
   /**
-   * Get the offline storage instance (for testing)
+   * Get the offline storage instance (tests, and consent withdrawal)
    */
   getOfflineStorage(): OfflineStorage | null {
     return this.offlineStorage;

@@ -133,3 +133,12 @@ export async function resolvePromotedWinner(
 export function getAssignedVariant(experiment: Experiment, assignment: StoredAssignment) {
   return experiment.variants?.find((v) => v.id === assignment.variantId);
 }
+
+/** Delete the stored assignments cache. Consent withdrawal (flame#18). */
+export function clearStoredAssignments(): void {
+  try {
+    localStorage.removeItem(ASSIGNMENTS_KEY);
+  } catch {
+    // No storage: nothing was persisted.
+  }
+}

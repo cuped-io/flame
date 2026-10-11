@@ -1,7 +1,12 @@
 import type { FlameConfig, Experiment, StoredAssignment, IdentityMetadata, Variant } from './types';
 import type { UserContext } from './context';
 import { ApiClient } from './api';
-import { getOrCreateAssignment, getAssignedVariant, resolvePromotedWinner } from './assignment';
+import {
+  getOrCreateAssignment,
+  getAssignedVariant,
+  resolvePromotedWinner,
+  clearStoredAssignments,
+} from './assignment';
 import {
   getIdentity,
   identify as identifyUser,
@@ -9,6 +14,7 @@ import {
   initSessionStart,
   getSessionStart,
   seedDeviceId,
+  clearStoredIdentity,
   type Identity,
 } from './identity';
 import { collectContext } from './context';
@@ -16,6 +22,16 @@ import { applyVariant, rollbackChanges } from './apply';
 import { TrackingManager } from './tracking';
 import { getActiveEcommerceGoals } from './ecommerce';
 import { parseDsn } from './dsn';
+import {
+  initialConsentState,
+  consentAllowsRunning,
+  privacySignal,
+  storeConsent,
+  SIGNAL_OVERRIDES_CONSENT,
+  type ConsentState,
+} from './consent';
+
+export type { ConsentState };
 
 declare const __VERSION__: string;
 
@@ -36,6 +52,8 @@ class Flame {
   // are frozen (flame#42).
   private promotedWinners: Variant[] = [];
   private initialized = false;
+  private consentStatus: ConsentState = 'not_required';
+  private applyAfterReveal = false;
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
   private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
@@ -55,6 +73,77 @@ class Flame {
     const parsed = parseDsn(config.dsn);
     this.apiClient = new ApiClient(parsed.apiKey, parsed.apiUrl, config.debug);
     this.log('Initialized', { apiUrl: parsed.apiUrl });
+
+    // Before consent, nothing: no ID, no storage, no network (flame#18).
+    // The rules (signals, a saved choice, the posture) live in consent.ts.
+    this.consentStatus = initialConsentState(!!config.requireConsent);
+    if (!consentAllowsRunning(this.consentStatus)) {
+      this.log('Not running', { consent: this.consentStatus });
+      this.getAntiflicker()?.reveal();
+      return;
+    }
+
+    await this.start(config);
+  }
+
+  /**
+   * Record the visitor's consent choice (flame#18). `true` starts flame on
+   * the current page, applying the variant even though the original is
+   * already showing, and saves the choice.
+   */
+  consent(granted: boolean): ConsentState {
+    if (!granted) return this.withdraw();
+    if (!this.config) return this.consentStatus;
+    // Counsel-gated (flame#18), built "signal wins": a browser privacy
+    // signal beats a site's explicit consent. Warn, so a suppressed accept is
+    // not mistaken for a broken install.
+    const signal = privacySignal();
+    if (signal && SIGNAL_OVERRIDES_CONSENT) {
+      console.warn(
+        `[Flame] consent(true) ignored: the visitor's browser sends ${signal}, which keeps tracking off.`
+      );
+      this.consentStatus = 'blocked_by_signal';
+      return this.consentStatus;
+    }
+    this.consentStatus = 'granted';
+    storeConsent('granted');
+    // 'next-page': the grant is saved; init starts flame on the next load.
+    if (this.config.consentApply !== 'next-page') {
+      void this.start(this.config, { afterReveal: true });
+    }
+    return this.consentStatus;
+  }
+
+  /**
+   * Withdraw consent (flame#18). Fully synchronous, with no await, so no
+   * unload or tab-hide flush can run part-way through. Sends nothing more:
+   * the tracker's queue is dropped, not flushed, and its retry store
+   * deleted. Then every stored identifier and the assignments cache go.
+   * The page is left as it is: showing a variant is not tracking. Only the
+   * refusal is kept, so later pages honour it. A request already sent
+   * before this call cannot be recalled.
+   */
+  private withdraw(): ConsentState {
+    this.trackingManager?.discard();
+    this.trackingManager = null;
+    this.pendingEvents = [];
+    clearStoredIdentity();
+    clearStoredAssignments();
+    this.assignments.clear();
+    this.consentStatus = 'denied';
+    storeConsent('denied');
+    return this.consentStatus;
+  }
+
+  /**
+   * Everything that needs consent: identity, tracking, assignment, apply.
+   * `afterReveal`: started by consent on a page already showing the
+   * original, so apply even though the anti-flicker hide has been lifted.
+   */
+  private async start(config: FlameConfig, { afterReveal = false } = {}): Promise<void> {
+    // init() creates the client before anything can call start().
+    if (!this.apiClient) return;
+    this.applyAfterReveal = afterReveal;
 
     // Initialize session start time (for identity linking)
     initSessionStart();
@@ -246,7 +335,8 @@ class Flame {
     const af = this.getAntiflicker();
 
     // Timeout already revealed the original → don't apply late (would flash).
-    if (af?.revealed) return;
+    // Except after consent, where applying on the visible page is the design.
+    if (af?.revealed && !this.applyAfterReveal) return;
 
     // One variant's failure must not stop the others or the reveal (flame#35).
     const applySafely = (variant: Variant) => {
@@ -295,6 +385,8 @@ class Flame {
    * @param metadata - Optional metadata for event-specific data
    */
   track(eventType: string, metadata?: Record<string, unknown>): void {
+    // Before consent nothing counts, not even later (flame#18).
+    if (!consentAllowsRunning(this.consentStatus)) return;
     if (!this.trackingManager) {
       // Fired before init() ran — buffer it and deliver once init sets up the
       // tracking manager (matches useTrack's documented behavior; #20). Prevents
@@ -304,6 +396,11 @@ class Flame {
     }
 
     this.trackingManager.track(eventType, metadata);
+  }
+
+  /** Where flame stands on the visitor's consent (flame#18). */
+  consentState(): ConsentState {
+    return this.consentStatus;
   }
 
   /**
@@ -481,7 +578,10 @@ function autoInit(): void {
 
   const debug = scriptElement.getAttribute('data-debug') === 'true';
   const autoEcommerce = scriptElement.getAttribute('data-ecommerce') === 'true';
-  flame.init({ dsn, debug, autoEcommerce });
+  const requireConsent = scriptElement.getAttribute('data-consent') === 'required';
+  const consentApply =
+    scriptElement.getAttribute('data-consent-apply') === 'next-page' ? 'next-page' : 'immediate';
+  flame.init({ dsn, debug, autoEcommerce, requireConsent, consentApply });
 }
 
 // Run auto-init

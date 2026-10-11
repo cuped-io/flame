@@ -264,3 +264,19 @@ export function hasPrePeriodEligibility(minAgeDays = 7): boolean {
   const minAgeMs = minAgeDays * 24 * 60 * 60 * 1000;
   return identity.deviceIdAgeMs >= minAgeMs;
 }
+
+/**
+ * Delete every identifier flame holds, stored and in memory: the device ID,
+ * its created-at and the authenticated ID. Consent withdrawal (flame#18).
+ */
+export function clearStoredIdentity(): void {
+  sessionUserId = null;
+  authenticatedUserId = null;
+  try {
+    localStorage.removeItem(DEVICE_ID_KEY);
+    localStorage.removeItem(DEVICE_ID_CREATED_AT_KEY);
+    localStorage.removeItem(AUTHENTICATED_ID_KEY);
+  } catch {
+    // No storage: nothing was persisted.
+  }
+}
