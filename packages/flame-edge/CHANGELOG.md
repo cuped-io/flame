@@ -1,5 +1,28 @@
 # @cuped-io/flame-edge
 
+## 0.3.0
+
+### Minor Changes
+
+- cc2a144: Ask `/assign` again for experiments that were declined because the workspace was at its event cap or archived. Previously the signed cookie kept that refusal for its whole life (30 days by default), so edge-resolved users stayed unenrolled long after an upgrade, billing reset or revive. The cookie now records declined experiments with a retry time; once it passes, the edge re-asks for just those, as the same user, and re-signs the cookie. A per-experiment API failure is retried the same way, and a failed retry backs off rather than costing every request a timeout. Held-out users are never re-asked. Older cookies remain valid.
+
+### Patch Changes
+
+- 711785b: Handle `/assign` answers with no variant — held out, workspace at its event cap, or workspace archived — as a normal outcome: render the original, attach no assignment to events, surface no error or warning, and don't persist the refusal to localStorage. `@cuped-io/flame-edge` leaves such experiments out of the prehydrated cookie.
+
+  **Behavior change in `@cuped-io/flame-react`:** `<Experiment>` now renders its `fallback` only while loading. Once loaded, a user in no variant (held out, or not enrolled) gets `variants.control` — previously they kept seeing `fallback` indefinitely.
+
+- Updated dependencies [a97adb2]
+- Updated dependencies [121c2d7]
+- Updated dependencies [711785b]
+- Updated dependencies [4a39616]
+- Updated dependencies [121c2d7]
+- Updated dependencies [121c2d7]
+- Updated dependencies [91a50b5]
+- Updated dependencies [1ffb050]
+- Updated dependencies [121c2d7]
+  - @cuped-io/flame@0.6.0
+
 ## 0.2.4
 
 ### Patch Changes
