@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { getUserId, getOrCreateAssignment, getAssignedVariant } from './assignment';
-import type { Experiment, StoredAssignment, Variant } from './types';
+import type { AssignmentResponse, Experiment, StoredAssignment, Variant } from './types';
 import type { ApiClient } from './api';
 
 describe('assignment', () => {
@@ -82,7 +82,7 @@ describe('assignment', () => {
       variants: [mockVariant],
     };
 
-    const createMockApiClient = (assignmentResponse: Partial<ReturnType<typeof vi.fn>>) => {
+    const createMockApiClient = (assignmentResponse: Partial<AssignmentResponse>) => {
       return {
         assignVariant: vi.fn().mockResolvedValue({
           assignment_id: 'assign-1',
@@ -108,9 +108,9 @@ describe('assignment', () => {
         undefined,
         undefined
       );
-      expect(assignment.experimentId).toBe('exp-1');
-      expect(assignment.variantId).toBe('variant-1');
-      expect(assignment.userId).toBe(userId);
+      expect(assignment?.experimentId).toBe('exp-1');
+      expect(assignment?.variantId).toBe('variant-1');
+      expect(assignment?.userId).toBe(userId);
     });
 
     it('should store assignment in localStorage', async () => {
@@ -158,7 +158,42 @@ describe('assignment', () => {
 
       // Should call the API to get a new assignment
       expect(mockApiClient.assignVariant).toHaveBeenCalled();
-      expect(assignment.variantId).toBe('variant-1');
+      expect(assignment?.variantId).toBe('variant-1');
+    });
+
+    // ember answers 200 with null variant fields when the caller is in no
+    // variant: held out of the project (ADR 0024), the workspace is at its
+    // event cap, or the workspace is archived. All three render the original.
+    const NO_VARIANT = {
+      assignment_id: null,
+      variant_id: null,
+      variant_name: null,
+      is_control: null,
+      assigned_at: null,
+      held_out: false,
+      cap_reached: false,
+      workspace_archived: false,
+    };
+
+    it.each([
+      ['held out', { ...NO_VARIANT, held_out: true }],
+      ['cap reached', { ...NO_VARIANT, cap_reached: true }],
+      ['workspace archived', { ...NO_VARIANT, workspace_archived: true }],
+    ])('returns no assignment when %s', async (_arm, response) => {
+      const mockApiClient = createMockApiClient(response);
+
+      const assignment = await getOrCreateAssignment(mockExperiment, 'user-123', mockApiClient);
+
+      expect(assignment).toBeNull();
+    });
+
+    it('does not persist a variant-less response', async () => {
+      const mockApiClient = createMockApiClient({ ...NO_VARIANT, held_out: true });
+
+      await getOrCreateAssignment(mockExperiment, 'user-123', mockApiClient);
+
+      const stored = JSON.parse(localStorage.getItem('flame_assignments') ?? '{}');
+      expect(stored['exp-1']).toBeUndefined();
     });
   });
 

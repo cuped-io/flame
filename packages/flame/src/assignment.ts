@@ -40,6 +40,9 @@ function storeAssignment(assignment: StoredAssignment): void {
  * @param apiClient - API client instance
  * @param context - Optional user context for segment-level CUPED
  * @param identity - Optional identity metadata for CUPED eligibility
+ * @returns The assignment, or `null` when the user is in no variant (held
+ *   out, workspace capped or archived). `null` means "render the original":
+ *   it is a normal outcome, not an error, and is never persisted.
  */
 export async function getOrCreateAssignment(
   experiment: Experiment,
@@ -47,7 +50,7 @@ export async function getOrCreateAssignment(
   apiClient: ApiClient,
   context?: UserContext,
   identity?: IdentityMetadata
-): Promise<StoredAssignment> {
+): Promise<StoredAssignment | null> {
   // Check for existing assignment
   const stored = getStoredAssignments();
   const existing = stored[experiment.id];
@@ -64,12 +67,24 @@ export async function getOrCreateAssignment(
   // Request new assignment from API with context and identity
   const response = await apiClient.assignVariant(experiment.id, userId, context, identity);
 
+  // In no variant: held out, capped or archived. Don't persist, so the next
+  // page load asks again and picks up an enrollment once one is possible.
+  if (
+    response.held_out ||
+    response.cap_reached ||
+    response.workspace_archived ||
+    response.variant_id === null
+  ) {
+    return null;
+  }
+
   // Convert API response to stored format
   const assignment: StoredAssignment = {
     experimentId: response.experiment_id,
     variantId: response.variant_id,
     userId: userId,
-    assignedAt: response.assigned_at,
+    // `null` for a promoted winner, which writes no assignment row.
+    assignedAt: response.assigned_at ?? new Date().toISOString(),
   };
 
   // Store for future visits

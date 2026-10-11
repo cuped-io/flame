@@ -71,6 +71,23 @@ describe('<Experiment>', () => {
     expect(await findByText('control fallback')).toBeTruthy();
   });
 
+  it('renders control, not the loading fallback, once loaded with no variant', async () => {
+    // A held-out (or capped / archived) user: init resolves with no
+    // assignment. They must see the original, not a skeleton forever.
+    const { flame } = createStubFlame({ assignments: {} });
+    const { findByText, queryByText } = render(
+      <CupedProvider dsn="x" flame={flame}>
+        <Experiment
+          id="hero-cta"
+          variants={{ control: <span>original</span>, green: <span>green</span> }}
+          fallback={<span>loading...</span>}
+        />
+      </CupedProvider>
+    );
+    expect(await findByText('original')).toBeTruthy();
+    expect(queryByText('loading...')).toBeNull();
+  });
+
   it('renders null when neither fallback nor control is provided and loading', () => {
     const { flame } = createStubFlame({ autoInit: false });
     const { container } = render(

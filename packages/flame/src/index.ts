@@ -97,21 +97,7 @@ class Flame {
         this.log(`Using ${this.experiments.length} prehydrated experiments`);
 
         for (const experiment of this.experiments) {
-          const assignment = config.prehydrated.assignments[experiment.id];
-          if (!assignment) {
-            this.log(`No prehydrated assignment for ${experiment.id} — skipping`);
-            continue;
-          }
-          this.assignments.set(experiment.id, assignment);
-          this.trackingManager.registerAssignment(assignment);
-
-          this.log(
-            `Prehydrated assignment ${assignment.variantId} for experiment ${experiment.id}`
-          );
-
-          if (experiment.goals && experiment.goals.length > 0) {
-            this.trackingManager.registerGoals(experiment.id, experiment.goals);
-          }
+          this.registerExperiment(experiment, config.prehydrated.assignments[experiment.id]);
         }
       } else {
         // Default path: fetch from the API.
@@ -146,15 +132,7 @@ class Flame {
         );
 
         for (const { experiment, assignment } of resolved) {
-          this.assignments.set(experiment.id, assignment);
-          this.trackingManager.registerAssignment(assignment);
-
-          this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
-
-          // Register experiment-specific goals
-          if (experiment.goals && experiment.goals.length > 0) {
-            this.trackingManager.registerGoals(experiment.id, experiment.goals);
-          }
+          this.registerExperiment(experiment, assignment);
         }
       }
 
@@ -190,6 +168,34 @@ class Flame {
       this.log('Flame SDK initialized successfully');
     } catch (error) {
       console.error('[Flame] Failed to initialize:', error);
+    }
+  }
+
+  /**
+   * Register one experiment's assignment and goals with the tracker.
+   *
+   * No assignment means the user is in no variant — held out, the
+   * workspace is capped or archived, or edge resolution skipped it. That
+   * is a normal outcome: the page renders the original and events carry
+   * no assignment for this experiment. Its goals still register, so a
+   * held-out user's conversions reach the Holdout comparison.
+   */
+  private registerExperiment(
+    experiment: Experiment,
+    assignment: StoredAssignment | null | undefined
+  ): void {
+    // `variantId` is checked too: flame-edge cookies signed before it learned
+    // to omit variant-less users carry `variantId: null`.
+    if (assignment?.variantId) {
+      this.assignments.set(experiment.id, assignment);
+      this.trackingManager?.registerAssignment(assignment);
+      this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
+    } else {
+      this.log(`No variant for experiment ${experiment.id} — rendering original`);
+    }
+
+    if (experiment.goals && experiment.goals.length > 0) {
+      this.trackingManager?.registerGoals(experiment.id, experiment.goals);
     }
   }
 

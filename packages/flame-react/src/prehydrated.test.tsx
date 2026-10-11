@@ -100,6 +100,25 @@ describe('SSR with prehydrated', () => {
     expect(getByTestId('state').textContent).toBe('null');
   });
 
+  it('a held-out user renders the original on the server, with no fallback flash', () => {
+    // flame-edge omits an experiment's assignment when the user is held
+    // out (or the workspace is capped / archived).
+    const heldOut: PrehydratedState = { ...prehydrated, assignments: {} };
+    const { flame } = createStubFlame({ autoInit: false });
+    const html = renderToString(
+      <CupedProvider dsn="x" flame={flame} prehydrated={heldOut}>
+        <Experiment
+          id="exp-1"
+          variants={{ control: <span>original</span>, green: <span>green-cta</span> }}
+          fallback={<span>skeleton</span>}
+        />
+      </CupedProvider>
+    );
+    expect(html).toContain('original');
+    expect(html).not.toContain('skeleton');
+    expect(html).not.toContain('green-cta');
+  });
+
   it('without prehydrated, server render shows loading (v0.1 fallback path)', () => {
     const { flame } = createStubFlame({ autoInit: false });
     const html = renderToString(

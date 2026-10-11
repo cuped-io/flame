@@ -193,6 +193,51 @@ describe('resolveAssignments', () => {
     expect(result.prehydrated?.experiments.map((e) => e.id)).toEqual(['exp-1', 'exp-2']);
     expect(Object.keys(result.prehydrated?.assignments ?? {})).toEqual(['exp-1']);
   });
+
+  // ember answers 200 with null variant fields when the caller is in no
+  // variant. For these users the original *is* the answer.
+  const NO_VARIANT = {
+    assignment_id: null,
+    experiment_id: 'exp-1',
+    variant_id: null,
+    variant_name: null,
+    is_control: null,
+    assigned_at: null,
+    held_out: false,
+    cap_reached: false,
+    workspace_archived: false,
+  };
+
+  it.each([
+    ['held out', { ...NO_VARIANT, held_out: true }],
+    ['cap reached', { ...NO_VARIANT, cap_reached: true }],
+    ['workspace archived', { ...NO_VARIANT, workspace_archived: true }],
+  ])('resolves %s to the original immediately, with no assignment', async (_arm, body) => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([
+        () => new Response(JSON.stringify({ experiments: [exp1] }), { status: 200 }),
+        () => new Response(JSON.stringify(body), { status: 200 }),
+      ])
+    );
+
+    const started = Date.now();
+    const result = await resolveAssignments({
+      dsn: DSN,
+      request: makeRequest(),
+      secret: SECRET,
+      userId: 'edge-user-1',
+      // Far longer than the test may take: resolving must not wait on it.
+      timeoutMs: 60_000,
+    });
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+    // A resolved answer, not the `null` fallback that hands off to the client.
+    expect(result.prehydrated).not.toBeNull();
+    expect(result.prehydrated?.experiments).toEqual([exp1]);
+    expect(result.prehydrated?.assignments).toEqual({});
+    expect(result.setCookie).toBeDefined();
+  });
 });
 
 describe('readPrehydratedFromCookieHeader', () => {

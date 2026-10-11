@@ -13,8 +13,9 @@ export interface ExperimentProps {
    */
   variants: VariantsMap;
   /**
-   * What to render while the SDK is still initializing or if there's
-   * no assignment yet. Defaults to `variants.control` if present, else `null`.
+   * What to render while the SDK is still initializing. Defaults to
+   * `variants.control` if present, else `null`. Once loaded, a user in
+   * no variant (held out, or not enrolled) gets `variants.control`.
    */
   fallback?: ReactNode;
 }
@@ -31,20 +32,21 @@ export interface ExperimentProps {
  *
  * Picks the entry from `variants` whose key matches the assigned
  * variant's name. While loading, renders `fallback` if given,
- * otherwise the `control` entry, otherwise null.
+ * otherwise the `control` entry, otherwise null. A user in no variant
+ * (held out, or not enrolled) renders the `control` entry.
  */
 export function Experiment({ id, variants, fallback }: ExperimentProps) {
   const { variant, isLoading } = useExperiment(id);
 
-  if (isLoading || !variant) {
+  if (isLoading) {
     if (fallback !== undefined) return <>{fallback}</>;
     return <>{variants.control ?? null}</>;
   }
 
-  const matched = variants[variant.name];
+  const matched = variant ? variants[variant.name] : undefined;
   if (matched !== undefined) return <>{matched}</>;
 
-  // Assignment exists but no entry in `variants` for that name —
-  // fall through to control.
+  // No variant (held out, or not enrolled), or no entry in `variants`
+  // for the assigned name — render the original.
   return <>{variants.control ?? null}</>;
 }

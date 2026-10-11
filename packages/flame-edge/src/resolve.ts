@@ -116,7 +116,8 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
             userId,
             signal: controller.signal,
           });
-          return [exp.id, assignment] as const;
+          // In no variant: leave it out, so the page renders the original.
+          return assignment ? ([exp.id, assignment] as const) : null;
         } catch {
           // One bad experiment shouldn't kill the whole resolution.
           return null;

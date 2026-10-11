@@ -320,18 +320,24 @@ export interface CreateAssignmentRequest {
  * Response from the assignment endpoint (matches the cuped API)
  */
 export interface AssignmentResponse {
-  /** Assignment ID */
-  assignment_id: string;
+  /** Assignment ID. `null` unless an assignment row was written. */
+  assignment_id: string | null;
   /** Experiment ID */
   experiment_id: string;
-  /** Variant ID */
-  variant_id: string;
-  /** Variant name */
-  variant_name: string;
-  /** Whether this is the control variant */
-  is_control: boolean;
-  /** Timestamp when the assignment was made */
-  assigned_at: string;
+  /** Variant ID. `null` when the caller is in no variant (see the flags below). */
+  variant_id: string | null;
+  /** Variant name. `null` when the caller is in no variant. */
+  variant_name: string | null;
+  /** Whether this is the control variant. `null` when the caller is in no variant. */
+  is_control: boolean | null;
+  /** Timestamp when the assignment was made. `null` unless an assignment row was written. */
+  assigned_at: string | null;
+  /** The caller is in the project's Holdout and sees the original experience. */
+  held_out?: boolean;
+  /** The workspace is at its event cap and this new caller was not enrolled. */
+  cap_reached?: boolean;
+  /** The workspace is archived and this new caller was not enrolled. */
+  workspace_archived?: boolean;
 }
 
 /**

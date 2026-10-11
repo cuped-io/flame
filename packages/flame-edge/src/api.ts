@@ -13,12 +13,16 @@ interface ActiveExperimentsResponse {
  * `/{api_key}/experiments/{id}/assign` returns.
  */
 interface AssignResponse {
-  assignment_id: string;
+  assignment_id: string | null;
   experiment_id: string;
-  variant_id: string;
-  variant_name: string;
-  is_control: boolean;
-  assigned_at: string;
+  /** `null` when the caller is in no variant (see the flags below). */
+  variant_id: string | null;
+  variant_name: string | null;
+  is_control: boolean | null;
+  assigned_at: string | null;
+  held_out?: boolean;
+  cap_reached?: boolean;
+  workspace_archived?: boolean;
 }
 
 /**
@@ -59,9 +63,15 @@ export async function fetchActiveExperiments(opts: FetchOpts): Promise<Experimen
   return body.experiments ?? [];
 }
 
+/**
+ * Assign the user to a variant. Resolves `null` when the user is in no
+ * variant — held out, workspace capped or archived — which means "render
+ * the original". That is an answer, not a failure. Mirrors
+ * `getOrCreateAssignment` in `@cuped-io/flame`; keep the two in step.
+ */
 export async function assignVariant(
   opts: FetchOpts & { experimentId: string; userId: string }
-): Promise<StoredAssignment> {
+): Promise<StoredAssignment | null> {
   const res = await fetch(`${opts.apiUrl}/${opts.apiKey}/experiments/${opts.experimentId}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -72,10 +82,14 @@ export async function assignVariant(
     throw new Error(`assign failed for ${opts.experimentId}: ${res.status}`);
   }
   const body = (await res.json()) as AssignResponse;
+  if (body.held_out || body.cap_reached || body.workspace_archived || body.variant_id === null) {
+    return null;
+  }
   return {
     experimentId: body.experiment_id,
     variantId: body.variant_id,
     userId: opts.userId,
-    assignedAt: body.assigned_at,
+    // `null` for a promoted winner, which writes no assignment row.
+    assignedAt: body.assigned_at ?? new Date().toISOString(),
   };
 }
