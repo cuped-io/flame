@@ -50,6 +50,12 @@ export interface FlameConfig {
    */
   consentApply?: 'immediate' | 'next-page';
   /**
+   * Apply a variant only once React has hydrated its target element
+   * (flame#44). Applying before hydration makes React throw #418 and
+   * discard the variant. Script tag: `data-wait-for-hydration="true"`.
+   */
+  waitForHydration?: boolean;
+  /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
    * skips the HTTP fetch and uses these directly. Produced by
    * `@cuped-io/flame-edge` for SSR zero-flash; the React SDK forwards

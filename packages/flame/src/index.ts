@@ -23,6 +23,12 @@ import { TrackingManager } from './tracking';
 import { getActiveEcommerceGoals } from './ecommerce';
 import { parseDsn } from './dsn';
 import {
+  HYDRATION_POLL_MS,
+  HYDRATION_TIMEOUT_MS,
+  reactSsrDetected,
+  targetsHydrated,
+} from './hydration';
+import {
   initialConsentState,
   consentAllowsRunning,
   privacySignal,
@@ -54,6 +60,7 @@ class Flame {
   private initialized = false;
   private consentStatus: ConsentState = 'not_required';
   private applyAfterReveal = false;
+  private hydrationWaitStart: number | null = null;
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
   private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
@@ -338,6 +345,17 @@ class Flame {
     // Except after consent, where applying on the visible page is the design.
     if (af?.revealed && !this.applyAfterReveal) return;
 
+    // On a server-rendered React page, wait until React has hydrated every
+    // target element, or React throws #418 and discards the variant (#44).
+    if (this.shouldWaitForHydration() && !targetsHydrated(this.targetSelectors())) {
+      this.hydrationWaitStart ??= Date.now();
+      if (Date.now() - this.hydrationWaitStart < HYDRATION_TIMEOUT_MS) {
+        setTimeout(() => this.applyAllVariants(), HYDRATION_POLL_MS);
+        return;
+      }
+      this.log('React did not hydrate the targets in time; applying anyway');
+    }
+
     // One variant's failure must not stop the others or the reveal (flame#35).
     const applySafely = (variant: Variant) => {
       try {
@@ -364,6 +382,26 @@ class Flame {
     } finally {
       af?.reveal();
     }
+  }
+
+  /** The opt-in when set; otherwise whether the page is React SSR. */
+  private shouldWaitForHydration(): boolean {
+    return this.config?.waitForHydration ?? reactSsrDetected();
+  }
+
+  /** The selectors the assigned variants and promoted winners change. */
+  private targetSelectors(): string[] {
+    const variants = [
+      ...this.experiments.flatMap((experiment) => {
+        const assignment = this.assignments.get(experiment.id);
+        const variant = assignment && getAssignedVariant(experiment, assignment);
+        return variant ? [variant] : [];
+      }),
+      ...this.promotedWinners,
+    ];
+    return variants.flatMap((v) =>
+      (v.changes ?? []).flatMap((c) => ('selector' in c ? [c.selector] : []))
+    );
   }
 
   /** The page's anti-flicker handle, if the inline snippet installed one. */
@@ -581,7 +619,11 @@ function autoInit(): void {
   const requireConsent = scriptElement.getAttribute('data-consent') === 'required';
   const consentApply =
     scriptElement.getAttribute('data-consent-apply') === 'next-page' ? 'next-page' : 'immediate';
-  flame.init({ dsn, debug, autoEcommerce, requireConsent, consentApply });
+  // Absent: auto-detect React SSR frameworks. "true"/"false": force (#44).
+  const hydrationAttr = scriptElement.getAttribute('data-wait-for-hydration');
+  const waitForHydration =
+    hydrationAttr === 'true' ? true : hydrationAttr === 'false' ? false : undefined;
+  flame.init({ dsn, debug, autoEcommerce, requireConsent, consentApply, waitForHydration });
 }
 
 // Run auto-init
