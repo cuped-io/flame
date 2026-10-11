@@ -80,6 +80,17 @@ export class TrackingManager {
   }
 
   /**
+   * Switch the user every later event is stamped with (identify, logout).
+   * Events already created keep the ID they were created under, since
+   * `track` stamps `user_id` at creation. One manager across identity
+   * changes, so listeners, goals and the queue are never duplicated or
+   * dropped (flame#36).
+   */
+  setUserId(userId: string): void {
+    this.userId = userId;
+  }
+
+  /**
    * Register an assignment for tracking
    */
   registerAssignment(assignment: StoredAssignment): void {

@@ -7,6 +7,7 @@ import type {
   StyleChange,
   TextChange,
   Variant,
+  VariantChange,
   VisibilityChange,
 } from './types';
 
@@ -181,10 +182,29 @@ function applyVisibilityChange(change: VisibilityChange, debug: boolean): boolea
   return true;
 }
 
+/**
+ * True when `url` (absolute or relative to `current`) names the page at
+ * `current`: same origin and path, a trailing slash ignored. The hash is
+ * ignored. A query in `url` must match exactly; a target with no query
+ * matches any. Exported for tests.
+ */
+export function isCurrentLocation(url: string, current: string): boolean {
+  let target: URL;
+  let here: URL;
+  try {
+    target = new URL(url, current);
+    here = new URL(current);
+  } catch {
+    return false;
+  }
+  const path = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
+  if (target.origin !== here.origin || path(target.pathname) !== path(here.pathname)) return false;
+  return target.search === '' || target.search === here.search;
+}
+
 function applyRedirectChange(change: RedirectChange, debug: boolean): void {
   if (debug) console.log(`[Flame] redirect to ${change.url}`);
-  // Run on a microtask so a synchronous test or caller can inspect
-  // the call before the page actually navigates.
+  // Synchronous: the page starts unloading as soon as href is set.
   if (typeof window !== 'undefined') {
     window.location.href = change.url;
   }
@@ -207,43 +227,63 @@ export function applyVariant(variant: Variant, debug = false): void {
   // If any change is a redirect, fire it first and short-circuit.
   // Other changes are pointless once we're navigating away.
   const redirect = variant.changes.find((c): c is RedirectChange => c.type === 'redirect');
-  if (redirect) {
+  // Experiments have no page targeting, so the variant also runs on the
+  // redirect's own destination. Redirecting there again loops forever
+  // (flame#37): treat the redirect as done and apply the other changes.
+  const alreadyThere =
+    !!redirect &&
+    typeof window !== 'undefined' &&
+    isCurrentLocation(redirect.url, window.location.href);
+  if (redirect && !alreadyThere) {
     applyRedirectChange(redirect, debug);
     return;
   }
 
   for (const change of variant.changes) {
-    switch (change.type) {
-      case 'text':
-        applyTextChange(change, debug);
-        break;
-      case 'html':
-        applyHtmlChange(change, debug);
-        break;
-      case 'attribute':
-        applyAttributeChange(change, debug);
-        break;
-      case 'class':
-        applyClassChange(change, debug);
-        break;
-      case 'style':
-        applyStyleChange(change, debug);
-        break;
-      case 'css':
-        applyCssChange(change, debug);
-        break;
-      case 'visibility':
-        applyVisibilityChange(change, debug);
-        break;
-      case 'redirect':
-        // Already handled above; here to satisfy exhaustiveness.
-        break;
-      default: {
-        // Exhaustiveness check — TS will error if a VariantChange
-        // case is added without a branch above.
-        const _exhaustive: never = change;
-        if (debug) console.warn('[Flame] Unknown change type:', _exhaustive);
-      }
+    // One bad change (an invalid selector throws from querySelector) must not
+    // skip the variant's later changes (flame#35).
+    try {
+      applyChange(change, debug);
+    } catch (error) {
+      console.warn(
+        `[Flame] Failed to apply ${change.type} change to "${'selector' in change ? change.selector : ''}":`,
+        error
+      );
+    }
+  }
+}
+
+function applyChange(change: VariantChange, debug: boolean): void {
+  switch (change.type) {
+    case 'text':
+      applyTextChange(change, debug);
+      break;
+    case 'html':
+      applyHtmlChange(change, debug);
+      break;
+    case 'attribute':
+      applyAttributeChange(change, debug);
+      break;
+    case 'class':
+      applyClassChange(change, debug);
+      break;
+    case 'style':
+      applyStyleChange(change, debug);
+      break;
+    case 'css':
+      applyCssChange(change, debug);
+      break;
+    case 'visibility':
+      applyVisibilityChange(change, debug);
+      break;
+    case 'redirect':
+      // Already handled above; here to satisfy exhaustiveness.
+      break;
+    default: {
+      // Exhaustiveness check — TS will error if a VariantChange
+      // case is added without a branch above.
+      const _exhaustive: never = change;
+      if (debug) console.warn('[Flame] Unknown change type:', _exhaustive);
     }
   }
 }

@@ -28,6 +28,13 @@ export interface FlameConfig {
   /** Time-to-live in milliseconds for offline events (default: 86400000 = 24 hours) */
   offlineTtlMs?: number;
   /**
+   * Auto-detect e-commerce clicks (add to cart, checkout, …) and track them
+   * as goals. Off by default (flame#38): the selectors are broad, every
+   * match is a billable event, and a non-shop page can match them (an
+   * address form's "add" button). Script tag: `data-ecommerce="true"`.
+   */
+  autoEcommerce?: boolean;
+  /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
    * skips the HTTP fetch and uses these directly. Produced by
    * `@cuped-io/flame-edge` for SSR zero-flash; the React SDK forwards

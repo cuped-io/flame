@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { applyVariant, getModifiedElements, rollbackChanges } from './apply';
+import { applyVariant, getModifiedElements, isCurrentLocation, rollbackChanges } from './apply';
 import type { Variant, VariantChange } from './types';
 
 // Test helper — minimal Variant with the given changes.
@@ -282,6 +282,41 @@ describe('apply', () => {
         window.location.href = originalHref;
       } catch {
         /* jsdom may reject; harmless for the assertion above */
+      }
+    });
+  });
+
+  // flame#37: experiments have no page targeting, so a redirect variant also
+  // runs on its own destination and used to redirect forever.
+  describe('redirect loop guard', () => {
+    it('isCurrentLocation matches the same origin and path, ignoring a trailing slash and the hash', () => {
+      const here = 'https://shop.example.com/pricing-v2?ref=ad#plans';
+      expect(isCurrentLocation('/pricing-v2', here)).toBe(true);
+      expect(isCurrentLocation('/pricing-v2/', here)).toBe(true);
+      expect(isCurrentLocation('https://shop.example.com/pricing-v2', here)).toBe(true);
+      expect(isCurrentLocation('/pricing', here)).toBe(false);
+      expect(isCurrentLocation('https://other.example.com/pricing-v2', here)).toBe(false);
+      // A query in the target must match; none in the target matches any.
+      expect(isCurrentLocation('/pricing-v2?ref=ad', here)).toBe(true);
+      expect(isCurrentLocation('/pricing-v2?ref=email', here)).toBe(false);
+    });
+
+    it('on the destination page, does not redirect again and applies the other changes', () => {
+      // jsdom does not navigate on an href assignment, so the detector is the
+      // text change: a redirect short-circuits the variant's other changes.
+      const original = new URL(window.location.href).pathname;
+      window.history.pushState({}, '', '/pricing-v2');
+      document.body.innerHTML = '<h1 id="title">Original</h1>';
+      try {
+        applyVariant(
+          v([
+            { type: 'redirect', url: '/pricing-v2' },
+            { selector: '#title', type: 'text', value: 'Destination copy' },
+          ])
+        );
+        expect(document.querySelector('#title')?.textContent).toBe('Destination copy');
+      } finally {
+        window.history.pushState({}, '', original);
       }
     });
   });

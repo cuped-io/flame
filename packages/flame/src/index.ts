@@ -127,32 +127,48 @@ class Flame {
         const userId = this.userId;
         const apiClient = this.apiClient;
         const context = this.context ?? undefined;
-        // Promoted winners resolve in the same parallel batch.
+        // Promoted winners resolve in the same parallel batch. Settled, not
+        // all-or-nothing (flame#35): one failing /assign used to reject the
+        // whole batch, so no experiment applied and nothing was tracked.
         const [resolved, winners] = await Promise.all([
-          Promise.all(
+          Promise.allSettled(
             this.experiments.map((experiment) =>
               getOrCreateAssignment(experiment, userId, apiClient, context, identityMeta).then(
                 (assignment) => ({ experiment, assignment })
               )
             )
           ),
-          Promise.all(
+          Promise.allSettled(
             (response.promoted ?? []).map((promoted) =>
               resolvePromotedWinner(promoted, userId, apiClient, context, identityMeta)
             )
           ),
         ]);
 
-        for (const { experiment, assignment } of resolved) {
-          this.registerExperiment(experiment, assignment);
-        }
-        this.promotedWinners = winners.filter((winner): winner is Variant => winner !== null);
+        resolved.forEach((result, i) => {
+          if (result.status === 'fulfilled') {
+            this.registerExperiment(result.value.experiment, result.value.assignment);
+          } else {
+            // The visitor sees the original for this experiment only.
+            console.warn(
+              `[Flame] Assignment failed for experiment ${this.experiments[i].id}:`,
+              result.reason
+            );
+          }
+        });
+        this.promotedWinners = winners.flatMap((result) => {
+          if (result.status === 'rejected') {
+            console.warn('[Flame] Promoted winner failed to resolve:', result.reason);
+            return [];
+          }
+          return result.value ? [result.value] : [];
+        });
         this.log(`Serving ${this.promotedWinners.length} promoted winners`);
       }
 
-      // Register e-commerce auto-detection goals for all experiments
-      // This happens after assignments are registered so global goals work
-      const ecommerceGoals = getActiveEcommerceGoals();
+      // E-commerce auto-detection is opt-in (flame#38). Registered after the
+      // assignments so the global goals carry them.
+      const ecommerceGoals = this.config?.autoEcommerce ? getActiveEcommerceGoals() : [];
       if (ecommerceGoals.length > 0) {
         this.trackingManager.registerGlobalGoals(ecommerceGoals);
         this.log(`Detected ${ecommerceGoals.length} e-commerce goals on page`);
@@ -182,6 +198,8 @@ class Flame {
       this.log('Flame SDK initialized successfully');
     } catch (error) {
       console.error('[Flame] Failed to initialize:', error);
+      // Never leave an anti-flicker page hidden until its timeout (flame#35).
+      this.getAntiflicker()?.reveal();
     }
   }
 
@@ -230,21 +248,32 @@ class Flame {
     // Timeout already revealed the original → don't apply late (would flash).
     if (af?.revealed) return;
 
-    for (const experiment of this.experiments) {
-      const assignment = this.assignments.get(experiment.id);
-      if (!assignment) continue;
+    // One variant's failure must not stop the others or the reveal (flame#35).
+    const applySafely = (variant: Variant) => {
+      try {
+        applyVariant(variant, this.config?.debug);
+      } catch (error) {
+        console.warn(`[Flame] Failed to apply variant ${variant.id}:`, error);
+      }
+    };
 
-      const variant = getAssignedVariant(experiment, assignment);
-      if (!variant) continue;
+    try {
+      for (const experiment of this.experiments) {
+        const assignment = this.assignments.get(experiment.id);
+        if (!assignment) continue;
 
-      applyVariant(variant, this.config?.debug);
+        const variant = getAssignedVariant(experiment, assignment);
+        if (!variant) continue;
+
+        applySafely(variant);
+      }
+
+      for (const winner of this.promotedWinners) {
+        applySafely(winner);
+      }
+    } finally {
+      af?.reveal();
     }
-
-    for (const winner of this.promotedWinners) {
-      applyVariant(winner, this.config?.debug);
-    }
-
-    af?.reveal();
   }
 
   /** The page's anti-flicker handle, if the inline snippet installed one. */
@@ -314,31 +343,10 @@ class Flame {
     this.identity = getIdentity();
     this.userId = this.identity.userId;
 
-    // Update tracking manager with new user ID
-    if (this.trackingManager && this.apiClient && this.config) {
-      this.trackingManager = new TrackingManager(this.apiClient, this.userId, {
-        debug: this.config.debug,
-        enableBatching: this.config.enableBatching,
-        batchSize: this.config.batchSize,
-        flushIntervalMs: this.config.flushIntervalMs,
-        dsn: this.config.dsn,
-        enableOfflineStorage: this.config.enableOfflineStorage,
-        maxOfflineEvents: this.config.maxOfflineEvents,
-        offlineTtlMs: this.config.offlineTtlMs,
-      });
-
-      // Re-register existing assignments with new user ID
-      for (const assignment of this.assignments.values()) {
-        this.trackingManager.registerAssignment(assignment);
-      }
-
-      // Re-register goals
-      for (const experiment of this.experiments) {
-        if (experiment.goals && experiment.goals.length > 0) {
-          this.trackingManager.registerGoals(experiment.id, experiment.goals);
-        }
-      }
-    }
+    // Same tracker, new user (flame#36). Rebuilding it here left the old
+    // one's listeners firing under the device ID, never started the new
+    // one's, and dropped the e-commerce goals.
+    this.trackingManager?.setUserId(this.userId);
 
     // Link the authenticated user to their device ID for CUPED
     // This allows the backend to find pre-period events from before authentication
@@ -371,6 +379,8 @@ class Flame {
     // Update local state
     this.identity = getIdentity();
     this.userId = this.identity.userId;
+    // Events after logout carry the device ID again (flame#36).
+    this.trackingManager?.setUserId(this.userId);
 
     this.log('Identity cleared', { identityType: this.identity.type });
   }
@@ -470,7 +480,8 @@ function autoInit(): void {
   if (!dsn) return;
 
   const debug = scriptElement.getAttribute('data-debug') === 'true';
-  flame.init({ dsn, debug });
+  const autoEcommerce = scriptElement.getAttribute('data-ecommerce') === 'true';
+  flame.init({ dsn, debug, autoEcommerce });
 }
 
 // Run auto-init
