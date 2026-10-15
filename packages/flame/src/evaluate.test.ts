@@ -426,3 +426,39 @@ describe('one record per visitor per experiment', () => {
     expect(records()[1].metadata?.variant_id).toBe('exp-1-control');
   });
 });
+
+describe('promoted winners', () => {
+  it('a promoted winner comes from the same /evaluate, is applied, and is never recorded', async () => {
+    const winner = { ...EXP_1.variants![1], id: 'winner-1', experiment_id: 'exp-p' };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/events') && init?.body) {
+        sent.push(...(JSON.parse(String(init.body)).events as SentEvent[]));
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith('/experiments/active')) {
+        return new Response(
+          JSON.stringify({ experiments: [], promoted: [{ id: 'exp-p', winner }] }),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith('/evaluate')) {
+        return new Response(
+          JSON.stringify({
+            evaluations: [{ ...evaluation('exp-p', 'treatment'), variant_id: 'winner-1' }],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    expect(document.getElementById('one')?.textContent).toBe('exp-1 variant');
+    expect(calls(fetchMock as never, /\/evaluate$/)).toHaveLength(1);
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(records()).toHaveLength(0);
+    expect(sent.find((e) => e.event_type === 'pageview')?.experiment_assignments).toBeUndefined();
+  });
+});
