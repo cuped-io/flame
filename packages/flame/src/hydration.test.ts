@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
 import type { Experiment } from './types';
+import { evaluateBody } from './test-evaluation';
 
 // flame#44: on a server-rendered React page, applying a variant before React
 // hydrates makes React throw #418 (hydration mismatch) and discard it. flame
@@ -41,9 +42,9 @@ function stubApi() {
       if (url.endsWith('/experiments/active')) {
         return new Response(JSON.stringify({ experiments: [experiment] }), { status: 200 });
       }
-      if (url.endsWith('/experiments/exp-1/assign')) {
+      if (url.endsWith('/evaluate')) {
         return new Response(
-          JSON.stringify({
+          evaluateBody({
             assignment_id: 'a1',
             experiment_id: 'exp-1',
             variant_id: 'variant-A',

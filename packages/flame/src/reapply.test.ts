@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
 import type { Experiment, Variant, VariantChange } from './types';
+import { evaluateBody } from './test-evaluation';
 
 // flame#45: flame applied only at init, so a target React re-created (a
 // remount, client-side navigation away and back) lost its variant. flame now
@@ -49,9 +50,9 @@ function stubApi(exp: Experiment) {
       if (url.endsWith('/experiments/active')) {
         return new Response(JSON.stringify({ experiments: [exp] }), { status: 200 });
       }
-      if (url.endsWith('/experiments/exp-1/assign')) {
+      if (url.endsWith('/evaluate')) {
         return new Response(
-          JSON.stringify({
+          evaluateBody({
             assignment_id: 'a1',
             experiment_id: 'exp-1',
             variant_id: 'variant-A',
@@ -259,9 +260,9 @@ describe('re-apply on DOM change (flame#45)', () => {
             { status: 200 }
           );
         }
-        if (url.endsWith('/experiments/exp-p/assign')) {
+        if (url.endsWith('/evaluate')) {
           return new Response(
-            JSON.stringify({
+            evaluateBody({
               assignment_id: null,
               experiment_id: 'exp-p',
               variant_id: 'variant-A',

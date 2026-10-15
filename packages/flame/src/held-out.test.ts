@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
 import { TrackingManager } from './tracking';
 import type { AssignmentResponse, Experiment } from './types';
+import { evaluateBody } from './test-evaluation';
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
 
@@ -47,8 +48,8 @@ function stubApi(assign: AssignmentResponse) {
     if (url.endsWith('/experiments/active')) {
       return new Response(JSON.stringify({ experiments: [experiment] }), { status: 200 });
     }
-    if (url.endsWith('/experiments/exp-1/assign')) {
-      return new Response(JSON.stringify(assign), { status: 200 });
+    if (url.endsWith('/evaluate')) {
+      return new Response(evaluateBody(assign), { status: 200 });
     }
     return new Response('{}', { status: 200 });
   });
@@ -56,8 +57,8 @@ function stubApi(assign: AssignmentResponse) {
   return fetchMock;
 }
 
-function assignCalls(fetchMock: ReturnType<typeof stubApi>): number {
-  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/assign')).length;
+function evaluateCalls(fetchMock: ReturnType<typeof stubApi>): number {
+  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/evaluate')).length;
 }
 
 describe.each([
@@ -87,7 +88,7 @@ describe.each([
     expect(flame.isInitialized()).toBe(true);
   });
 
-  it('is silent: no console error or warning, and asks /assign exactly once', async () => {
+  it('is silent: no console error or warning, and asks /evaluate exactly once', async () => {
     const error = vi.spyOn(console, 'error');
     const warn = vi.spyOn(console, 'warn');
     const fetchMock = stubApi(response);
@@ -97,7 +98,7 @@ describe.each([
 
     expect(error).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
-    expect(assignCalls(fetchMock)).toBe(1);
+    expect(evaluateCalls(fetchMock)).toBe(1);
   });
 
   it('reveals an anti-flicker page immediately', async () => {
@@ -134,7 +135,7 @@ describe.each([
     await new Flame().init({ dsn: DSN });
     await new Flame().init({ dsn: DSN });
 
-    expect(assignCalls(fetchMock)).toBe(2);
+    expect(evaluateCalls(fetchMock)).toBe(2);
   });
 });
 

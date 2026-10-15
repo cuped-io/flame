@@ -399,6 +399,31 @@ export interface AssignmentResponse {
 }
 
 /**
+ * One experiment's answer from `POST /{api_key}/evaluate` (ember ADR 0041).
+ * Evaluation enrols nobody: the visitor is counted only when flame records
+ * the arm it delivers (flame#46). The fields mean what they mean on
+ * {@link AssignmentResponse}.
+ */
+export interface ExperimentEvaluation {
+  experiment_id: string;
+  /** The arm to deliver. `null` when held out, capped or archived. */
+  variant_id: string | null;
+  variant_name: string | null;
+  is_control: boolean | null;
+  held_out: boolean;
+  cap_reached: boolean;
+  workspace_archived: boolean;
+}
+
+/**
+ * Response from `POST /{api_key}/evaluate`: one answer per running experiment
+ * and promoted winner. An experiment with no arm to give is left out.
+ */
+export interface EvaluateResponse {
+  evaluations: ExperimentEvaluation[];
+}
+
+/**
  * Stored assignment (local representation)
  */
 export interface StoredAssignment {

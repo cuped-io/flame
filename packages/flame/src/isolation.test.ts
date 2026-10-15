@@ -2,11 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
 import { TrackingManager } from './tracking';
 import type { AssignmentResponse, Experiment, VariantChange } from './types';
+import { evaluateBody } from './test-evaluation';
 
 // flame#35: one experiment's failure must not stop the others. A failing
 // /assign used to reject the whole Promise.all batch into init's catch, and
 // an invalid selector threw out of the apply loop, so no variant applied, no
-// pageview was tracked and the anti-flicker hide was never revealed.
+// pageview was tracked and the anti-flicker hide was never revealed. Since
+// flame#46 one /evaluate answers every experiment: an experiment it leaves
+// out renders the original alone, and a failed evaluation renders the
+// original everywhere but still tracks and reveals.
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
 
@@ -46,7 +50,10 @@ function assigned(id: string): AssignmentResponse {
   };
 }
 
-function stubApi(experiments: Experiment[], failAssignFor: string | null = null) {
+function stubApi(
+  experiments: Experiment[],
+  { omit = null, fail = false }: { omit?: string | null; fail?: boolean } = {}
+) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL | Request) => {
@@ -54,10 +61,10 @@ function stubApi(experiments: Experiment[], failAssignFor: string | null = null)
       if (url.endsWith('/experiments/active')) {
         return new Response(JSON.stringify({ experiments }), { status: 200 });
       }
-      const m = url.match(/\/experiments\/([^/]+)\/assign$/);
-      if (m) {
-        if (m[1] === failAssignFor) return new Response('{"error":"internal"}', { status: 500 });
-        return new Response(JSON.stringify(assigned(m[1])), { status: 200 });
+      if (url.endsWith('/evaluate')) {
+        if (fail) return new Response('{"error":"internal"}', { status: 500 });
+        const answered = experiments.filter((e) => e.id !== omit).map((e) => assigned(e.id));
+        return new Response(evaluateBody(...answered), { status: 200 });
       }
       return new Response('{}', { status: 200 });
     })
@@ -65,6 +72,15 @@ function stubApi(experiments: Experiment[], failAssignFor: string | null = null)
 }
 
 const text = (id: string) => document.getElementById(id)?.textContent;
+
+// Each Flame keeps watching the page after init (flame#45). Reset them, or an
+// earlier test's watcher re-applies its variant to the next test's DOM.
+const started: Flame[] = [];
+const fresh = () => {
+  const flame = new Flame();
+  started.push(flame);
+  return flame;
+};
 
 describe('flame.init() isolates one experiment from another (flame#35)', () => {
   let reveal: ReturnType<typeof vi.fn>;
@@ -81,23 +97,45 @@ describe('flame.init() isolates one experiment from another (flame#35)', () => {
   });
 
   afterEach(() => {
+    started.splice(0).forEach((flame) => flame.reset());
     delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
   });
 
-  it('a 500 from one /assign still applies the other experiment, tracks the pageview and reveals', async () => {
+  it('an experiment /evaluate leaves out renders the original; the other still applies, tracks and reveals', async () => {
     const pageview = vi.spyOn(TrackingManager.prototype, 'trackPageview');
     stubApi(
       [
         experiment('exp-a', [{ type: 'text', selector: '#a', value: 'A variant' }]),
         experiment('exp-b', [{ type: 'text', selector: '#b', value: 'B variant' }]),
       ],
-      'exp-a'
+      { omit: 'exp-a' }
     );
 
-    await new Flame().init({ dsn: DSN });
+    await fresh().init({ dsn: DSN });
 
     expect(text('a')).toBe('A original');
     expect(text('b')).toBe('B variant');
+    expect(pageview).toHaveBeenCalledTimes(1);
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a 500 from /evaluate renders the original everywhere, still tracks the pageview and reveals', async () => {
+    const pageview = vi.spyOn(TrackingManager.prototype, 'trackPageview');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubApi(
+      [
+        experiment('exp-a', [{ type: 'text', selector: '#a', value: 'A variant' }]),
+        experiment('exp-b', [{ type: 'text', selector: '#b', value: 'B variant' }]),
+      ],
+      { fail: true }
+    );
+
+    const flame = fresh();
+    await flame.init({ dsn: DSN });
+
+    expect(text('a')).toBe('A original');
+    expect(text('b')).toBe('B original');
+    expect(flame.isInitialized()).toBe(true);
     expect(pageview).toHaveBeenCalledTimes(1);
     expect(reveal).toHaveBeenCalledTimes(1);
   });
@@ -108,7 +146,7 @@ describe('flame.init() isolates one experiment from another (flame#35)', () => {
       experiment('exp-b', [{ type: 'text', selector: '#b', value: 'B variant' }]),
     ]);
 
-    await new Flame().init({ dsn: DSN });
+    await fresh().init({ dsn: DSN });
 
     expect(text('b')).toBe('B variant');
     expect(reveal).toHaveBeenCalledTimes(1);
@@ -122,7 +160,7 @@ describe('flame.init() isolates one experiment from another (flame#35)', () => {
       ]),
     ]);
 
-    await new Flame().init({ dsn: DSN });
+    await fresh().init({ dsn: DSN });
 
     expect(text('a')).toBe('A variant');
   });

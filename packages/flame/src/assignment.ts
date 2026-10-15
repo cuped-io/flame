@@ -3,6 +3,7 @@ import type {
   Experiment,
   IdentityMetadata,
   PromotedExperiment,
+  ExperimentEvaluation,
   Variant,
 } from './types';
 import type { UserContext } from './context';
@@ -38,93 +39,80 @@ function storeAssignment(assignment: StoredAssignment): void {
   }
 }
 
-/**
- * Get existing assignment for an experiment, or request a new one
- *
- * @param experiment - The experiment to get/create assignment for
- * @param userId - User identifier
- * @param apiClient - API client instance
- * @param context - Optional user context for segment-level CUPED
- * @param identity - Optional identity metadata for CUPED eligibility
- * @returns The assignment, or `null` when the user is in no variant (held
- *   out, workspace capped or archived). `null` means "render the original":
- *   it is a normal outcome, not an error, and is never persisted.
- */
-export async function getOrCreateAssignment(
-  experiment: Experiment,
-  userId: string,
-  apiClient: ApiClient,
-  context?: UserContext,
-  identity?: IdentityMetadata
-): Promise<StoredAssignment | null> {
-  // Check for existing assignment
-  const stored = getStoredAssignments();
-  const existing = stored[experiment.id];
-
-  if (existing) {
-    // Verify the variant still exists in the experiment
-    const variantExists = experiment.variants?.some((v) => v.id === existing.variantId);
-    if (variantExists) {
-      return existing;
-    }
-    // Variant no longer exists, need new assignment
-  }
-
-  // Request new assignment from API with context and identity
-  const response = await apiClient.assignVariant(experiment.id, userId, context, identity);
-
-  // In no variant: held out, capped or archived. Don't persist, so the next
-  // page load asks again and picks up an enrollment once one is possible.
-  if (
-    response.held_out ||
-    response.cap_reached ||
-    response.workspace_archived ||
-    response.variant_id === null
-  ) {
-    return null;
-  }
-
-  // Convert API response to stored format
-  const assignment: StoredAssignment = {
-    experimentId: response.experiment_id,
-    variantId: response.variant_id,
-    userId: userId,
-    // `null` for a promoted winner, which writes no assignment row.
-    assignedAt: response.assigned_at ?? new Date().toISOString(),
-  };
-
-  // Store for future visits
-  storeAssignment(assignment);
-
-  return assignment;
+/** Every arm this visitor gets, and the promoted winners they see. */
+export interface ResolvedAssignments {
+  /** Experiment id to arm. An experiment left out renders the original. */
+  arms: Map<string, StoredAssignment>;
+  winners: Variant[];
 }
 
 /**
- * Ask `/assign` whether this user sees a promoted experiment's winner.
+ * The arm for every experiment, from the cache or one `POST /evaluate`
+ * (flame#46). Evaluation enrols nobody, so an arm here is not yet counted:
+ * flame records it when it delivers it.
  *
- * Always asks, never reads or writes the stored assignment: the Holdout gate
- * runs before ember's promotion short-circuit, so only ember knows whether
- * this user is held out, and a stored row may name a losing variant. Leaving
- * that row alone means a reverted promotion puts the user back in it.
- *
- * @returns The winner, or `null` to render the original (held out, any
- *   other answer, or the request failed).
+ * A cached arm whose variant still exists is kept, as before. `/evaluate` is
+ * asked when any experiment has no cached arm, or when there are promoted
+ * winners, because only ember knows whether this user is held out of them.
+ * Held out, capped and archived answers are not cached, so the next page load
+ * asks again. If `/evaluate` fails, cached arms still apply and everything
+ * else renders the original.
  */
-export async function resolvePromotedWinner(
-  promoted: PromotedExperiment,
+export async function resolveAssignments(
+  experiments: Experiment[],
+  promoted: PromotedExperiment[],
   userId: string,
   apiClient: ApiClient,
   context?: UserContext,
   identity?: IdentityMetadata
-): Promise<Variant | null> {
-  try {
-    const response = await apiClient.assignVariant(promoted.id, userId, context, identity);
-    if (response.held_out || response.variant_id !== promoted.winner.id) return null;
-    return promoted.winner;
-  } catch {
-    // The original is always a safe answer; don't fail init over it.
-    return null;
+): Promise<ResolvedAssignments> {
+  const stored = getStoredAssignments();
+  const arms = new Map<string, StoredAssignment>();
+  const uncached: Experiment[] = [];
+  for (const experiment of experiments) {
+    const existing = stored[experiment.id];
+    if (existing && experiment.variants?.some((v) => v.id === existing.variantId)) {
+      arms.set(experiment.id, existing);
+    } else {
+      uncached.push(experiment);
+    }
   }
+  if (uncached.length === 0 && promoted.length === 0) return { arms, winners: [] };
+
+  let evaluations: ExperimentEvaluation[];
+  try {
+    const response = await apiClient.evaluate(userId, context, identity);
+    // A body without the list (an error page, an older server) is no answer,
+    // not a crash: init must still track and reveal.
+    if (!Array.isArray(response?.evaluations)) throw new Error('no evaluations in the response');
+    evaluations = response.evaluations;
+  } catch (error) {
+    console.warn('[Flame] Evaluation failed; rendering the original:', error);
+    return { arms, winners: [] };
+  }
+  const answers = new Map(evaluations.map((e) => [e.experiment_id, e]));
+
+  for (const experiment of uncached) {
+    const answer = answers.get(experiment.id);
+    if (!answer?.variant_id || answer.held_out || answer.cap_reached || answer.workspace_archived) {
+      continue;
+    }
+    if (!experiment.variants?.some((v) => v.id === answer.variant_id)) continue;
+    const assignment: StoredAssignment = {
+      experimentId: experiment.id,
+      variantId: answer.variant_id,
+      userId,
+      assignedAt: new Date().toISOString(),
+    };
+    storeAssignment(assignment);
+    arms.set(experiment.id, assignment);
+  }
+
+  const winners = promoted.flatMap((p) => {
+    const answer = answers.get(p.id);
+    return answer && !answer.held_out && answer.variant_id === p.winner.id ? [p.winner] : [];
+  });
+  return { arms, winners };
 }
 
 /**

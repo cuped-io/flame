@@ -1,12 +1,7 @@
 import type { FlameConfig, Experiment, StoredAssignment, IdentityMetadata, Variant } from './types';
 import type { UserContext } from './context';
 import { ApiClient } from './api';
-import {
-  getOrCreateAssignment,
-  getAssignedVariant,
-  resolvePromotedWinner,
-  clearStoredAssignments,
-} from './assignment';
+import { resolveAssignments, getAssignedVariant, clearStoredAssignments } from './assignment';
 import {
   getIdentity,
   identify as identifyUser,
@@ -218,52 +213,21 @@ class Flame {
           device_id_created_at: this.identity.deviceIdCreatedAt ?? undefined,
         };
 
-        // Resolve assignments for all experiments concurrently — one parallel
-        // batch instead of N serial round-trips, so a slow API no longer
-        // compounds per experiment (flame#17). Order is preserved by
-        // Promise.all, so registration below stays deterministic.
-        // Hoist the flow-narrowed members into locals: inside the map callback
-        // TS widens `this.userId`/`this.apiClient` back to their nullable
-        // declared types, so capture the narrowed values here first.
-        const userId = this.userId;
-        const apiClient = this.apiClient;
-        const context = this.context ?? undefined;
-        // Promoted winners resolve in the same parallel batch. Settled, not
-        // all-or-nothing (flame#35): one failing /assign used to reject the
-        // whole batch, so no experiment applied and nothing was tracked.
-        const [resolved, winners] = await Promise.all([
-          Promise.allSettled(
-            this.experiments.map((experiment) =>
-              getOrCreateAssignment(experiment, userId, apiClient, context, identityMeta).then(
-                (assignment) => ({ experiment, assignment })
-              )
-            )
-          ),
-          Promise.allSettled(
-            (response.promoted ?? []).map((promoted) =>
-              resolvePromotedWinner(promoted, userId, apiClient, context, identityMeta)
-            )
-          ),
-        ]);
-
-        resolved.forEach((result, i) => {
-          if (result.status === 'fulfilled') {
-            this.registerExperiment(result.value.experiment, result.value.assignment);
-          } else {
-            // The visitor sees the original for this experiment only.
-            console.warn(
-              `[Flame] Assignment failed for experiment ${this.experiments[i].id}:`,
-              result.reason
-            );
-          }
-        });
-        this.promotedWinners = winners.flatMap((result) => {
-          if (result.status === 'rejected') {
-            console.warn('[Flame] Promoted winner failed to resolve:', result.reason);
-            return [];
-          }
-          return result.value ? [result.value] : [];
-        });
+        // Every arm and promoted winner in one `/evaluate` (flame#46), which
+        // enrols nobody. A failed evaluation renders the original for every
+        // experiment without a cached arm, and does not fail init (flame#35).
+        const { arms, winners } = await resolveAssignments(
+          this.experiments,
+          response.promoted ?? [],
+          this.userId,
+          this.apiClient,
+          this.context ?? undefined,
+          identityMeta
+        );
+        for (const experiment of this.experiments) {
+          this.registerExperiment(experiment, arms.get(experiment.id));
+        }
+        this.promotedWinners = winners;
         this.log(`Serving ${this.promotedWinners.length} promoted winners`);
       }
 

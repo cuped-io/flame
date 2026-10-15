@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
 import { TrackingManager } from './tracking';
 import type { AssignmentResponse, PromotedExperiment, StoredAssignment } from './types';
+import { evaluateBody } from './test-evaluation';
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
 
@@ -60,10 +61,10 @@ function stubApi(assign: AssignmentResponse | (() => Response)) {
         status: 200,
       });
     }
-    if (url.endsWith('/experiments/exp-promoted/assign')) {
+    if (url.endsWith('/evaluate')) {
       return typeof assign === 'function'
         ? assign()
-        : new Response(JSON.stringify(assign), { status: 200 });
+        : new Response(evaluateBody(assign), { status: 200 });
     }
     return new Response('{}', { status: 200 });
   });
@@ -71,8 +72,8 @@ function stubApi(assign: AssignmentResponse | (() => Response)) {
   return fetchMock;
 }
 
-function assignCalls(fetchMock: ReturnType<typeof stubApi>): number {
-  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/assign')).length;
+function evaluateCalls(fetchMock: ReturnType<typeof stubApi>): number {
+  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/evaluate')).length;
 }
 
 function storedAssignments(): Record<string, StoredAssignment> {
@@ -102,7 +103,7 @@ describe('flame.init() with a promoted winner', () => {
     delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
   });
 
-  it('applies the winner when /assign names it', async () => {
+  it('applies the winner when /evaluate names it', async () => {
     stubApi(WINNER);
     await newFlame().init({ dsn: DSN });
 
@@ -116,20 +117,20 @@ describe('flame.init() with a promoted winner', () => {
     expect(headline()).toBe('Original headline');
   });
 
-  it('renders the original when /assign names some other variant', async () => {
+  it('renders the original when /evaluate names some other variant', async () => {
     stubApi({ ...WINNER, variant_id: 'variant-loser', variant_name: 'Control' });
     await newFlame().init({ dsn: DSN });
 
     expect(headline()).toBe('Original headline');
   });
 
-  it('asks /assign even when a stored assignment exists, and leaves it untouched', async () => {
+  it('asks /evaluate even when a stored assignment exists, and leaves it untouched', async () => {
     localStorage.setItem('flame_assignments', JSON.stringify({ 'exp-promoted': STORED_LOSER }));
     const fetchMock = stubApi(WINNER);
 
     await newFlame().init({ dsn: DSN });
 
-    expect(assignCalls(fetchMock)).toBe(1);
+    expect(evaluateCalls(fetchMock)).toBe(1);
     expect(headline()).toBe('Promoted winner text');
     // Kept as-is, so a reverted promotion puts the visitor back in their
     // original sticky variant.
@@ -143,12 +144,12 @@ describe('flame.init() with a promoted winner', () => {
     expect(storedAssignments()['exp-promoted']).toBeUndefined();
   });
 
-  it('asks /assign on every page load', async () => {
+  it('asks /evaluate on every page load', async () => {
     const fetchMock = stubApi(WINNER);
     await newFlame().init({ dsn: DSN });
     await newFlame().init({ dsn: DSN });
 
-    expect(assignCalls(fetchMock)).toBe(2);
+    expect(evaluateCalls(fetchMock)).toBe(2);
   });
 
   it('registers nothing for tracking and reports no variant', async () => {
@@ -180,7 +181,7 @@ describe('flame.init() with a promoted winner', () => {
     expect(reveal).toHaveBeenCalledOnce();
   });
 
-  it('renders the original and still initializes when /assign fails', async () => {
+  it('renders the original and still initializes when /evaluate fails', async () => {
     stubApi(() => new Response('boom', { status: 500 }));
     const flame = newFlame();
     await flame.init({ dsn: DSN });

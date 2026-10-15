@@ -5,6 +5,7 @@ import type {
   CreateEventBatchRequest,
   CreateEventRequest,
   CreateIdentityLinkRequest,
+  EvaluateResponse,
   IdentityLinkResponse,
   IdentityMetadata,
 } from './types';
@@ -109,6 +110,25 @@ export class ApiClient {
       identity,
     };
     return this.request<AssignmentResponse>('POST', `/experiments/${experimentId}/assign`, payload);
+  }
+
+  /**
+   * POST /{api_key}/evaluate
+   *
+   * The arm, or held-out, for every active experiment, in one request.
+   * Nothing is enrolled: flame records an arm when it delivers it (flame#46).
+   */
+  async evaluate(
+    userId: string,
+    context?: UserContext,
+    identity?: IdentityMetadata
+  ): Promise<EvaluateResponse> {
+    const payload: CreateAssignmentRequest = {
+      user_id: userId,
+      context: context as unknown as Record<string, unknown>,
+      identity,
+    };
+    return this.request<EvaluateResponse>('POST', '/evaluate', payload);
   }
 
   /**
