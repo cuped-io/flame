@@ -84,12 +84,19 @@ describe('hydration-aware apply (flame#44)', () => {
   it('with waitForHydration, leaves an element alone until React has hydrated it, then applies', async () => {
     stubApi();
     flame = new Flame();
-    await flame.init({ dsn: DSN, waitForHydration: true });
+    const init = flame.init({ dsn: DSN, waitForHydration: true });
+    let initDone = false;
+    void init.then(() => (initDone = true));
     await settle();
     expect(headline()).toBe('Original');
+    // Not initialized while waiting: getVariant would report no arm yet.
+    expect(initDone).toBe(false);
+    expect(flame.isInitialized()).toBe(false);
 
     hydrate('headline');
     await vi.waitFor(() => expect(headline()).toBe('Variant headline'));
+    // init resolves once the arm is delivered (flame#46).
+    await init;
   });
 
   it('waits automatically on a Next.js page (its __next_f marker), with no opt-in', async () => {
@@ -97,12 +104,14 @@ describe('hydration-aware apply (flame#44)', () => {
     (globalThis as unknown as { __next_f?: unknown[] }).__next_f = [];
     try {
       flame = new Flame();
-      await flame.init({ dsn: DSN });
+      const init = flame.init({ dsn: DSN });
       await settle();
       expect(headline()).toBe('Original');
 
       hydrate('headline');
       await vi.waitFor(() => expect(headline()).toBe('Variant headline'));
+      // init resolves once the arm is delivered (flame#46).
+      await init;
     } finally {
       delete (globalThis as unknown as { __next_f?: unknown[] }).__next_f;
     }
@@ -142,12 +151,14 @@ describe('hydration-aware apply (flame#44)', () => {
     addMarker();
     try {
       flame = new Flame();
-      await flame.init({ dsn: DSN });
+      const init = flame.init({ dsn: DSN });
       await settle();
       expect(headline()).toBe('Original');
 
       hydrate('headline');
       await vi.waitFor(() => expect(headline()).toBe('Variant headline'));
+      // init resolves once the arm is delivered (flame#46).
+      await init;
     } finally {
       delete (window as unknown as Record<string, unknown>).__remixContext;
       delete (window as unknown as Record<string, unknown>).__reactRouterContext;
@@ -181,11 +192,13 @@ describe('hydration-aware apply (flame#44)', () => {
     async () => {
       stubApi();
       flame = new Flame();
-      await flame.init({ dsn: DSN, waitForHydration: true });
+      const init = flame.init({ dsn: DSN, waitForHydration: true });
       await settle(4_500);
       expect(headline()).toBe('Original');
 
       await vi.waitFor(() => expect(headline()).toBe('Variant headline'), { timeout: 2_000 });
+      // init resolves once the arm is delivered (flame#46).
+      await init;
     }
   );
 
@@ -195,12 +208,14 @@ describe('hydration-aware apply (flame#44)', () => {
     (window as unknown as { __cupedAntiflicker: unknown }).__cupedAntiflicker = af;
     try {
       flame = new Flame();
-      await flame.init({ dsn: DSN, waitForHydration: true });
+      const init = flame.init({ dsn: DSN, waitForHydration: true });
       await settle();
       expect(af.reveal).not.toHaveBeenCalled();
 
       hydrate('headline');
       await vi.waitFor(() => expect(af.reveal).toHaveBeenCalledTimes(1));
+      // init resolves once the arm is delivered (flame#46).
+      await init;
       expect(headline()).toBe('Variant headline');
     } finally {
       delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;

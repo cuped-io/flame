@@ -63,6 +63,8 @@ class Flame {
   private hydrationWaitStart: number | null = null;
   // Record each delivered arm (flame#46). Off for prehydrated arms.
   private recordOnDelivery = false;
+  // Resolves start()'s wait once applyAllVariants has delivered or skipped.
+  private onDeliveryDecided: (() => void) | null = null;
   private identityMeta: IdentityMetadata | null = null;
   private domWatcher: { stop: () => void } | null = null;
   // Events fired via track() before init() ran — buffered here and flushed
@@ -252,7 +254,13 @@ class Flame {
         this.log(`Detected ${ecommerceGoals.length} e-commerce goals on page`);
       }
 
-      // Apply variants when DOM is ready
+      // Apply variants when DOM is ready. Nothing tagged with an arm goes out
+      // before that arm's record (flame#46), so the buffered events and the
+      // pageview wait for the delivery decision: applied, or skipped because
+      // the anti-flicker timeout already revealed the original.
+      const decided = new Promise<void>((resolve) => {
+        this.onDeliveryDecided = resolve;
+      });
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => this.applyAllVariants());
       } else {
@@ -262,15 +270,20 @@ class Flame {
       // Start auto-tracking (includes event-based ecommerce tracking)
       this.trackingManager.startAutoTracking();
 
-      // Flush events buffered before init ran (#20) — assignments are now
+      await decided;
+      // Consent may have been withdrawn while waiting: then send nothing.
+      const tracker = this.trackingManager as TrackingManager | null;
+      if (!tracker) return;
+
+      // Flush events buffered before init ran (#20). Delivered arms are now
       // registered, so they carry the active experiment context.
       for (const event of this.pendingEvents) {
-        this.trackingManager.track(event.eventType, event.metadata);
+        tracker.track(event.eventType, event.metadata);
       }
       this.pendingEvents = [];
 
       // Track initial pageview
-      this.trackingManager.trackPageview();
+      tracker.trackPageview();
 
       this.initialized = true;
       this.log('Flame SDK initialized successfully');
@@ -311,6 +324,13 @@ class Flame {
     }
   }
 
+  /** Lets start() send what waited for the delivery decision. Once. */
+  private deliveryDecided(): void {
+    const resolve = this.onDeliveryDecided;
+    this.onDeliveryDecided = null;
+    resolve?.();
+  }
+
   /** Events carry this arm from now on, and getVariant reports it. */
   private registerAssignment(assignment: StoredAssignment): void {
     this.assignments.set(assignment.experimentId, assignment);
@@ -333,7 +353,10 @@ class Flame {
 
     // Timeout already revealed the original → don't apply late (would flash).
     // Except after consent, where applying on the visible page is the design.
-    if (af?.revealed && !this.applyAfterReveal) return;
+    if (af?.revealed && !this.applyAfterReveal) {
+      this.deliveryDecided();
+      return;
+    }
 
     // On a server-rendered React page, wait until React has hydrated every
     // target element, or React throws #418 and discards the variant (#44).
@@ -383,6 +406,7 @@ class Flame {
       }
     } finally {
       af?.reveal();
+      this.deliveryDecided();
     }
 
     this.watchForFreshTargets();

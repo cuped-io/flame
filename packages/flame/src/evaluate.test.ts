@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
+import { EventQueue } from './queue';
 import type { Experiment, ExperimentEvaluation } from './types';
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
@@ -322,5 +323,75 @@ describe('when the anti-flicker timeout wins', () => {
         { experiment_id: 'exp-2', variant_id: 'exp-2-control' },
       ])
     );
+  });
+});
+
+describe('order: the record goes before anything tagged with its arm', () => {
+  // A page still parsing when flame resolves: apply waits for DOMContentLoaded.
+  const stillLoading = () => {
+    Object.defineProperty(document, 'readyState', { value: 'loading', configurable: true });
+  };
+  const finishLoading = () => {
+    Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+  };
+  afterEach(() => {
+    Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
+  });
+  const tagged = (e: SentEvent) =>
+    e.experiment_assignments?.some((a) => a.experiment_id === 'exp-1') ?? false;
+
+  it('a page still loading: nothing tagged goes out until delivery, then records lead and the rest carry the arm', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    stillLoading();
+    const flame = fresh();
+    flame.track('early_signup'); // before init: buffered (#20)
+    const init = flame.init({ dsn: DSN, enableBatching: false });
+
+    // flame has its answer but the DOM is not ready: nothing delivered yet.
+    await vi.waitFor(() => expect(sent.length + 1).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent.filter((e) => e.event_type === 'pageview')).toHaveLength(0);
+    expect(sent.filter((e) => e.event_type === 'early_signup')).toHaveLength(0);
+
+    finishLoading();
+    await init;
+
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    const types = sent.map((e) => e.event_type);
+    const recordAt = types.indexOf('$assignment');
+    expect(recordAt).toBeGreaterThanOrEqual(0);
+    expect(recordAt).toBeLessThan(types.indexOf('pageview'));
+    expect(recordAt).toBeLessThan(types.indexOf('early_signup'));
+    expect(tagged(sent.find((e) => e.event_type === 'pageview')!)).toBe(true);
+    expect(tagged(sent.find((e) => e.event_type === 'early_signup')!)).toBe(true);
+  });
+
+  it('a tab-hide flush while waiting sends no untagged pageview (batching on)', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    stillLoading();
+    const flame = fresh();
+    const init = flame.init({ dsn: DSN, flushIntervalMs: 60_000 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const flushed = vi.spyOn(EventQueue.prototype, 'flush');
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    // Browsers fire it at the document and it bubbles to window, where the queue listens.
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+    // Precondition: the tab-hide flush really ran during the wait.
+    expect(flushed).toHaveBeenCalled();
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent.filter((e) => e.event_type === 'pageview' && !tagged(e))).toHaveLength(0);
+
+    finishLoading();
+    await init;
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(sent.filter((e) => e.event_type === 'pageview').every(tagged)).toBe(true);
+    const types = sent.map((e) => e.event_type);
+    expect(types.indexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
   });
 });
