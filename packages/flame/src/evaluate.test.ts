@@ -395,3 +395,34 @@ describe('order: the record goes before anything tagged with its arm', () => {
     expect(types.indexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
   });
 });
+
+describe('one record per visitor per experiment', () => {
+  it('a second page load with the cached arm records nothing new', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+
+    started.splice(0).forEach((flame) => flame.reset());
+    await fresh().init({ dsn: DSN, enableBatching: false });
+    await vi.waitFor(() => expect(sent.filter((e) => e.event_type === 'pageview')).toHaveLength(2));
+    expect(records()).toHaveLength(1);
+  });
+
+  it('a new arm for the same experiment is recorded', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+
+    // The treatment arm is deleted, so the cached arm is evaluated again.
+    started.splice(0).forEach((flame) => flame.reset());
+    const controlOnly = {
+      ...EXP_1,
+      variants: EXP_1.variants!.filter((v) => v.is_control),
+    };
+    stubApi([controlOnly], [evaluation('exp-1', 'control')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(records()).toHaveLength(2));
+    expect(records()[1].metadata?.variant_id).toBe('exp-1-control');
+  });
+});

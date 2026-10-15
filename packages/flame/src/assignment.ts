@@ -122,10 +122,43 @@ export function getAssignedVariant(experiment: Experiment, assignment: StoredAss
   return experiment.variants?.find((v) => v.id === assignment.variantId);
 }
 
+// Which arm was recorded for whom, per experiment (flame#46). ember ignores a
+// duplicate record, but without this every page load would send one.
+const RECORDED_KEY = 'flame_recorded';
+
+function getRecorded(): Record<string, string> {
+  try {
+    const stored = localStorage.getItem(RECORDED_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Whether this user's arm for the experiment was already recorded. A
+ * different user or a different arm is recorded again.
+ */
+export function wasRecorded(experimentId: string, userId: string, variantId: string): boolean {
+  return getRecorded()[experimentId] === `${userId}:${variantId}`;
+}
+
+/** Remember that this user's arm was recorded. */
+export function markRecorded(experimentId: string, userId: string, variantId: string): void {
+  try {
+    const recorded = getRecorded();
+    recorded[experimentId] = `${userId}:${variantId}`;
+    localStorage.setItem(RECORDED_KEY, JSON.stringify(recorded));
+  } catch {
+    // No storage: this page load records again next time; ember dedupes.
+  }
+}
+
 /** Delete the stored assignments cache. Consent withdrawal (flame#18). */
 export function clearStoredAssignments(): void {
   try {
     localStorage.removeItem(ASSIGNMENTS_KEY);
+    localStorage.removeItem(RECORDED_KEY);
   } catch {
     // No storage: nothing was persisted.
   }

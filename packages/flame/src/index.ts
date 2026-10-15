@@ -1,7 +1,13 @@
 import type { FlameConfig, Experiment, StoredAssignment, IdentityMetadata, Variant } from './types';
 import type { UserContext } from './context';
 import { ApiClient } from './api';
-import { resolveAssignments, getAssignedVariant, clearStoredAssignments } from './assignment';
+import {
+  resolveAssignments,
+  getAssignedVariant,
+  clearStoredAssignments,
+  wasRecorded,
+  markRecorded,
+} from './assignment';
 import {
   getIdentity,
   identify as identifyUser,
@@ -392,10 +398,14 @@ class Flame {
         // Recorded before it is registered, so no event carries an arm ember
         // has not been told about.
         if (this.recordOnDelivery) {
-          this.trackingManager?.recordAssignment(experiment.id, variant.id, {
-            context: (this.context ?? undefined) as Record<string, unknown> | undefined,
-            identity: this.identityMeta ?? undefined,
-          });
+          const userId = this.userId ?? '';
+          if (!wasRecorded(experiment.id, userId, variant.id)) {
+            this.trackingManager?.recordAssignment(experiment.id, variant.id, {
+              context: (this.context ?? undefined) as Record<string, unknown> | undefined,
+              identity: this.identityMeta ?? undefined,
+            });
+            markRecorded(experiment.id, userId, variant.id);
+          }
           this.registerAssignment(assignment);
         }
         applySafely(variant);
