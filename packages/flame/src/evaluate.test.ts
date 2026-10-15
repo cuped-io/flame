@@ -287,3 +287,40 @@ describe('recording on delivery', () => {
     expect(records()).toHaveLength(0);
   });
 });
+
+describe('when the anti-flicker timeout wins', () => {
+  const revealedAlready = () => {
+    (window as unknown as { __cupedAntiflicker: unknown }).__cupedAntiflicker = {
+      revealed: true,
+      reveal: vi.fn(),
+    };
+  };
+  const pageviews = () => sent.filter((e) => e.event_type === 'pageview');
+
+  it('the visitor sees the original, is not recorded, and their events carry no arm', async () => {
+    revealedAlready();
+    stubApi([EXP_1, EXP_2], [evaluation('exp-1', 'treatment'), evaluation('exp-2', 'control')]);
+    const flame = fresh();
+    await flame.init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(pageviews()).toHaveLength(1));
+    expect(document.getElementById('one')?.textContent).toBe('one original');
+    expect(records()).toHaveLength(0);
+    expect(pageviews()[0].experiment_assignments).toBeUndefined();
+    expect(flame.getVariant('exp-1')).toBeNull();
+    expect(flame.getVariant('exp-2')).toBeNull();
+  });
+
+  it('positive control: delivered, the pageview carries both arms', async () => {
+    stubApi([EXP_1, EXP_2], [evaluation('exp-1', 'treatment'), evaluation('exp-2', 'control')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(pageviews()).toHaveLength(1));
+    expect(pageviews()[0].experiment_assignments).toEqual(
+      expect.arrayContaining([
+        { experiment_id: 'exp-1', variant_id: 'exp-1-treatment' },
+        { experiment_id: 'exp-2', variant_id: 'exp-2-control' },
+      ])
+    );
+  });
+});

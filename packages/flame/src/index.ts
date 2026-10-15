@@ -48,6 +48,10 @@ class Flame {
   private identity: Identity | null = null;
   private context: UserContext | null = null;
   private experiments: Experiment[] = [];
+  // Arms decided at init. Evaluated arms are registered (events carry them,
+  // getVariant reports them) only when delivered (flame#46).
+  private arms: Map<string, StoredAssignment> = new Map();
+  // Delivered and registered arms.
   private assignments: Map<string, StoredAssignment> = new Map();
   // Winners of promoted experiments this user sees. Applied to the DOM only:
   // never registered for tracking, since a concluded experiment's results
@@ -139,6 +143,7 @@ class Flame {
     this.pendingEvents = [];
     clearStoredIdentity();
     clearStoredAssignments();
+    this.arms.clear();
     this.assignments.clear();
     this.consentStatus = 'denied';
     storeConsent('denied');
@@ -198,6 +203,7 @@ class Flame {
         // React SDK's SSR flow with `@cuped-io/flame-edge`.
         this.experiments = config.prehydrated.experiments;
         this.log(`Using ${this.experiments.length} prehydrated experiments`);
+        this.recordOnDelivery = false;
 
         for (const experiment of this.experiments) {
           this.registerExperiment(experiment, config.prehydrated.assignments[experiment.id]);
@@ -291,8 +297,10 @@ class Flame {
     // `variantId` is checked too: flame-edge cookies signed before it learned
     // to omit variant-less users carry `variantId: null`.
     if (assignment?.variantId) {
-      this.assignments.set(experiment.id, assignment);
-      this.trackingManager?.registerAssignment(assignment);
+      this.arms.set(experiment.id, assignment);
+      // A prehydrated arm was recorded by flame-edge, so events carry it from
+      // the start, as before. An evaluated one waits for delivery (flame#46).
+      if (!this.recordOnDelivery) this.registerAssignment(assignment);
       this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
     } else {
       this.log(`No variant for experiment ${experiment.id} — rendering original`);
@@ -301,6 +309,12 @@ class Flame {
     if (experiment.goals && experiment.goals.length > 0) {
       this.trackingManager?.registerGoals(experiment.id, experiment.goals);
     }
+  }
+
+  /** Events carry this arm from now on, and getVariant reports it. */
+  private registerAssignment(assignment: StoredAssignment): void {
+    this.assignments.set(assignment.experimentId, assignment);
+    this.trackingManager?.registerAssignment(assignment);
   }
 
   /**
@@ -343,7 +357,7 @@ class Flame {
 
     try {
       for (const experiment of this.experiments) {
-        const assignment = this.assignments.get(experiment.id);
+        const assignment = this.arms.get(experiment.id);
         if (!assignment) continue;
 
         const variant = getAssignedVariant(experiment, assignment);
@@ -352,11 +366,14 @@ class Flame {
         // Delivered: count the visitor in this arm (flame#46). Recorded at the
         // decision to apply, not on a DOM change, so control (no changes) and
         // a variant whose change fails are counted the same way.
+        // Recorded before it is registered, so no event carries an arm ember
+        // has not been told about.
         if (this.recordOnDelivery) {
           this.trackingManager?.recordAssignment(experiment.id, variant.id, {
             context: (this.context ?? undefined) as Record<string, unknown> | undefined,
             identity: this.identityMeta ?? undefined,
           });
+          this.registerAssignment(assignment);
         }
         applySafely(variant);
       }
@@ -400,9 +417,14 @@ class Flame {
     ];
   }
 
-  /** The selectors the assigned variants and promoted winners change. */
+  /** The selectors the arms about to be delivered and promoted winners change. */
   private targetSelectors(): string[] {
-    return this.activeVariants().flatMap((v) =>
+    const pending = this.experiments.flatMap((experiment) => {
+      const arm = this.arms.get(experiment.id);
+      const variant = arm && getAssignedVariant(experiment, arm);
+      return variant ? [variant] : [];
+    });
+    return [...pending, ...this.promotedWinners].flatMap((v) =>
       (v.changes ?? []).flatMap((c) => ('selector' in c ? [c.selector] : []))
     );
   }
@@ -585,6 +607,7 @@ class Flame {
     this.domWatcher = null;
     rollbackChanges();
     this.trackingManager?.stopAutoTracking();
+    this.arms.clear();
     this.assignments.clear();
     this.experiments = [];
     this.promotedWinners = [];
