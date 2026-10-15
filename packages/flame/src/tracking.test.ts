@@ -758,3 +758,45 @@ describe('TrackingManager', () => {
     });
   });
 });
+
+// ember rejects a whole /events envelope over one malformed $assignment
+// (measured on dev, 2026-10-15), pageview included. So flame drops a record
+// ember would refuse rather than send it (flame#46).
+describe('recordAssignment drops a record ember would refuse', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const sendSpy = () => {
+    const trackEventsBeacon = vi.fn(() => true);
+    const manager = new TrackingManager({ trackEventsBeacon } as unknown as ApiClient, 'user-123', {
+      enableBatching: false,
+    });
+    return { manager, trackEventsBeacon };
+  };
+
+  it('sends a well-formed record', () => {
+    const { manager, trackEventsBeacon } = sendSpy();
+    manager.recordAssignment('exp-1', 'var-1');
+    expect(trackEventsBeacon).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['an empty experiment id', '', 'var-1', {}],
+    ['an empty variant id', 'exp-1', '', {}],
+    ['metadata over 4 KB', 'exp-1', 'var-1', { context: { blob: 'x'.repeat(5000) } }],
+    // ember counts bytes: 2,100 two-byte characters are 4,200 bytes.
+    [
+      'metadata over 4 KB in bytes but not characters',
+      'exp-1',
+      'var-1',
+      { context: { blob: 'é'.repeat(2100) } },
+    ],
+  ])('drops a record with %s, with a warning', (_case, experimentId, variantId, extras) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { manager, trackEventsBeacon } = sendSpy();
+    manager.recordAssignment(experimentId, variantId, extras);
+    expect(trackEventsBeacon).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+});

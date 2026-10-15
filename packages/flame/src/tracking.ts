@@ -429,6 +429,19 @@ export class TrackingManager {
       metadata: { experiment_id: experimentId, variant_id: variantId, ...extras },
       occurred_at: new Date().toISOString(),
     };
+    // ember refuses the whole envelope over one malformed record, taking the
+    // pageview with it, so a record it would refuse is dropped here instead.
+    const refusal = !experimentId
+      ? 'no experiment id'
+      : !variantId
+        ? 'no variant id'
+        : new TextEncoder().encode(JSON.stringify(event.metadata)).length > MAX_METADATA_BYTES
+          ? `metadata over ${MAX_METADATA_BYTES} bytes`
+          : null;
+    if (refusal) {
+      console.warn(`[Flame] Not recording an assignment ember would refuse (${refusal}).`);
+      return;
+    }
     if (this.debug) {
       console.log('[Flame] Recording assignment:', event.metadata);
     }
@@ -442,3 +455,6 @@ export class TrackingManager {
 
 /** ember's reserved event type for the record step (ADR 0041). */
 export const ASSIGNMENT_EVENT_TYPE = '$assignment';
+
+/** ember's cap on an event's serialized metadata (MAX_METADATA_BYTES). */
+const MAX_METADATA_BYTES = 4 * 1024;
