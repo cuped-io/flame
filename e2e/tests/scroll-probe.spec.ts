@@ -51,15 +51,20 @@ for (const anchoring of [true, false])
       await page.route(`${API}/**/experiments/active`, (r) =>
         r.fulfill({ json: { experiments: [experiment] } })
       );
-      await page.route(`${API}/**/experiments/exp_scroll/assign`, (r) =>
+      await page.route(`${API}/**/evaluate`, (r) =>
         r.fulfill({
           json: {
-            assignment_id: 'a',
-            experiment_id: 'exp_scroll',
-            variant_id: 'var_scroll_treatment',
-            variant_name: 'treatment',
-            is_control: false,
-            assigned_at: '2024-01-01T00:00:00Z',
+            evaluations: [
+              {
+                experiment_id: 'exp_scroll',
+                variant_id: 'var_scroll_treatment',
+                variant_name: 'treatment',
+                is_control: false,
+                held_out: false,
+                cap_reached: false,
+                workspace_archived: false,
+              },
+            ],
           },
         })
       );

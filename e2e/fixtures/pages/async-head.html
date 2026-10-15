@@ -1,0 +1,45 @@
+<!doctype html>
+<!--
+  e2e fixture (flame#46): the recommended install, an async flame tag in
+  <head> after the anti-flicker snippet (spark#393), on a page whose parsing
+  a slow script at the end of <body> holds up. flame answers while the page
+  is still loading, so apply waits for DOMContentLoaded. Served by
+  mock-server/static.mjs, which rewrites the placeholder DSN.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style id="cuped-af-hide">
+      html {
+        opacity: 0 !important;
+      }
+    </style>
+    <script>
+      (function () {
+        var af = { revealed: false };
+        af.reveal = function () {
+          if (af.revealed) return; // idempotent: resolve + timeout can both fire
+          af.revealed = true;
+          var s = document.getElementById('cuped-af-hide');
+          if (s && s.parentNode) s.parentNode.removeChild(s);
+        };
+        window.__cupedAntiflicker = af;
+        // Safety-net: if flame hasn't revealed within the window (slow/failed
+        // API), reveal the ORIGINAL so the page is never left hidden. Instant
+        // hide is only safe because this guarantees a reveal.
+        setTimeout(af.reveal, 1000);
+      })();
+    </script>
+    <script
+      async
+      src="../../../packages/flame/dist/flame.js"
+      data-dsn="https://YOUR_KEY@localhost:8080"
+    ></script>
+    <title>flame e2e: async install on a slow page</title>
+  </head>
+  <body>
+    <h1 id="target-text">Original text content.</h1>
+    <!-- The test delays this response, holding DOMContentLoaded. -->
+    <script src="/__slow-page.js"></script>
+  </body>
+</html>

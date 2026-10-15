@@ -107,9 +107,7 @@ test('auto-tracks a click goal with a custom name and selector', async ({ page, 
     .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
     .toContain('cart_add_clicked');
 
-  const event = (await getRecordedEvents(request)).find(
-    (e) => e.event_type === 'cart_add_clicked'
-  );
+  const event = (await getRecordedEvents(request)).find((e) => e.event_type === 'cart_add_clicked');
   expect(event?.metadata?.selector).toBe('.add-to-cart-cta');
   expect(event?.experiment_assignments).toContainEqual({
     experiment_id: 'exp_script_tag',
@@ -252,28 +250,80 @@ test('reveals the original after the timeout when the API stalls (never left bla
   await expect(page.locator('#target-text')).toContainText('Original text content.');
 });
 
-// N+1 assignment (flame#17). The mock serves two experiments, so the SDK
-// makes two /assign calls. A serial loop runs them one-after-another (never
-// more than one in flight); parallel runs them at once (both in flight). We
-// count max concurrency deterministically by holding each /assign briefly —
-// no flaky wall-clock threshold. Red on the serial loop (max 1), green once
-// parallelized (max 2).
-test('assigns experiments concurrently, not one serial round-trip at a time', async ({ page }) => {
-  let inFlight = 0;
-  let maxInFlight = 0;
-  await page.route('**/experiments/*/assign', async (route) => {
-    inFlight += 1;
-    maxInFlight = Math.max(maxInFlight, inFlight);
-    await new Promise((r) => setTimeout(r, 200));
-    inFlight -= 1;
-    await route.continue();
+// One evaluation, then record on delivery (flame#46, ember ADR 0041).
+// flame#17 made the per-experiment /assign calls parallel; flame#46
+// replaces them with one /evaluate for every arm, which enrols nobody.
+// flame then records each arm it delivers as a $assignment event, ahead of
+// any event tagged with that arm.
+test('learns every arm from one /evaluate and records each delivered arm before the pageview', async ({
+  page,
+  request,
+}) => {
+  const asked: string[] = [];
+  page.on('request', (r) => {
+    if (/\/evaluate$|\/assign$/.test(r.url())) asked.push(new URL(r.url()).pathname);
   });
 
   await page.goto(PAGE);
-  // Wait until assignment has completed (treatment applied).
   await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+  await flushBeacons(page);
 
-  expect(maxInFlight, 'the two /assign calls must overlap (parallel), not run serially').toBe(2);
+  expect(asked.filter((p) => p.endsWith('/evaluate'))).toHaveLength(1);
+  expect(asked.filter((p) => p.endsWith('/assign'))).toHaveLength(0);
+
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('pageview');
+  const events = await getRecordedEvents(request);
+  const types = events.map((e) => e.event_type);
+  const recorded = events
+    .filter((e) => e.event_type === '$assignment')
+    .map((e) => (e.metadata as { experiment_id: string }).experiment_id)
+    .sort();
+  expect(recorded).toEqual(['exp_react', 'exp_script_tag']);
+  expect(types.lastIndexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
+});
+
+// The same order when flame answers while the page is still loading: the
+// recommended install (an async flame tag in <head>, spark#393) on a page
+// whose parsing a slow script holds up. Apply then waits for
+// DOMContentLoaded, and nothing tagged may go out before the record.
+// On the stock example (flame at the end of <body>) the page has already
+// parsed when flame answers, so the test above cannot tell the order apart.
+test('records before the pageview when flame answers while the page is still loading', async ({
+  page,
+  request,
+}) => {
+  // A served fixture, not a route-fulfilled page: Chromium treats a
+  // fulfilled document as public and blocks its calls to the localhost mock.
+  const SLOW_PAGE = 'http://localhost:8789/e2e/fixtures/pages/async-head.html';
+  // Long enough that flame answers first, short enough to beat the snippet's
+  // 1 s timeout (past it, the original is revealed and flame skips: a
+  // different case, covered in the unit tests).
+  await page.route('**/__slow-page.js', async (route) => {
+    await new Promise((r) => setTimeout(r, 600));
+    await route.fulfill({ contentType: 'text/javascript', body: '' });
+  });
+  let evaluatedAt = 0;
+  page.on('response', (r) => {
+    if (r.url().endsWith('/evaluate')) evaluatedAt = Date.now();
+  });
+
+  await page.goto(SLOW_PAGE, { waitUntil: 'domcontentloaded' });
+  const loadedAt = Date.now();
+  // Precondition: flame had its answer before the page finished parsing,
+  // which is the case this test exists for.
+  expect(evaluatedAt, 'flame answered while the page was loading').toBeGreaterThan(0);
+  expect(evaluatedAt).toBeLessThan(loadedAt);
+
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+  await flushBeacons(page);
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toContain('pageview');
+  const types = (await getRecordedEvents(request)).map((e) => e.event_type);
+  expect(types).toContain('$assignment');
+  expect(types.lastIndexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
 });
 
 // --- promoted winners (flame#42, cuped-io/ember#300) -----------------
@@ -312,19 +362,21 @@ test('applies a promoted winner from the contract payload', async ({ page }) => 
 
 test('keeps the original for a visitor held out of a promoted winner', async ({ page }) => {
   await servePromotedContract(page);
-  await page.route(`**/experiments/${PROMOTED_CONTRACT.id}/assign`, (route) =>
-    route.fulfill({
+  // ember holds this visitor out of the promoted winner (ADR 0024).
+  await page.route('**/evaluate', async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { evaluations: { experiment_id: string }[] };
+    await route.fulfill({
+      response,
       json: {
-        assignment_id: null,
-        experiment_id: PROMOTED_CONTRACT.id,
-        variant_id: null,
-        variant_name: null,
-        is_control: null,
-        assigned_at: null,
-        held_out: true,
+        evaluations: body.evaluations.map((e) =>
+          e.experiment_id === PROMOTED_CONTRACT.id
+            ? { ...e, variant_id: null, variant_name: null, is_control: null, held_out: true }
+            : e
+        ),
       },
-    })
-  );
+    });
+  });
   await page.goto(PAGE);
 
   // Revealed on the original, not the winner.
@@ -356,4 +408,10 @@ test('sends no events for a promoted experiment', async ({ page, request }) => {
     (e) => e.experiment_assignments?.map((a) => a.experiment_id) ?? []
   );
   expect(experimentIds).not.toContain(PROMOTED_CONTRACT.id);
+  // Nor is it recorded: its results are frozen (flame#46).
+  const recordedIds = events
+    .filter((e) => e.event_type === '$assignment')
+    .map((e) => (e.metadata as { experiment_id: string }).experiment_id);
+  expect(recordedIds).toContain('exp_react');
+  expect(recordedIds).not.toContain(PROMOTED_CONTRACT.id);
 });

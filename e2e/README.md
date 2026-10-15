@@ -7,15 +7,17 @@ environment. Complements the packages' 260+ unit tests with a
 
 ## What it covers
 
-| Spec | Example | Asserts |
-|---|---|---|
-| `tests/script-tag.spec.ts` | `examples/script-tag` | Assignment applies across every non-redirect change type (`text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`); a `pageview` event and a `track()` event fire with the assignment attached; **goal auto-tracking** — a click goal, a submit goal and a project guardrail each fire an event named after the goal, and nothing fires for an unmatched click; **promoted winners** — the promoted contract's winner applies, a held-out visitor keeps the original, and no event carries the promoted experiment. |
-| `tests/next-app.spec.ts` | `examples/next-app` | Zero-flash SSR — the assigned variant is in the server HTML on a warm (cookie'd) visit; `useExperiment` / `<Experiment>` render the treatment; `useTrack` fires an event with the React assignment. |
+| Spec                       | Example               | Asserts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/script-tag.spec.ts` | `examples/script-tag` | Assignment applies across every non-redirect change type (`text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`); a `pageview` event and a `track()` event fire with the assignment attached; **goal auto-tracking** — a click goal, a submit goal and a project guardrail each fire an event named after the goal, and nothing fires for an unmatched click; **promoted winners** — the promoted contract's winner applies, a held-out visitor keeps the original, and no event carries the promoted experiment; **record on delivery** (flame#46) — one `/evaluate`, no `/assign`, and each delivered arm's `$assignment` record arrives before the pageview, including when flame answers while the page is still loading (`fixtures/pages/async-head.html`); **anti-flicker** — the page stays hidden until variants apply, and a stalled API reveals the original after the timeout. |
+| `tests/next-app.spec.ts`   | `examples/next-app`   | Zero-flash SSR — the assigned variant is in the server HTML on a warm (cookie'd) visit; `useExperiment` / `<Experiment>` render the treatment; `useTrack` fires an event with the React assignment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
-The script-tag "no flash" case is a `test.fixme` — the script-tag SDK
-applies variants only after the experiments/assign roundtrip, so it
-flashes today. Un-fixme it once anti-flicker lands (issue #21). The
-SSR path already renders flash-free and is asserted for real.
+The SSR path renders flash-free, and the script-tag path is flash-free
+behind the anti-flicker snippet (flame#16); both are asserted for real.
+
+The mock serves `/evaluate` as ember does (ADR 0041), and its `/events`
+refuses a whole envelope over one malformed `$assignment`, as ember does,
+so a bad record fails the suite instead of being accepted.
 
 ## The goal contract (cuped-io/ember#171)
 
@@ -30,16 +32,16 @@ against the selectors it names.
 
 Two halves of one claim:
 
-- ember: *given this goal configuration, I emit this payload.*
-- flame: *given this payload, a click on `.add-to-cart-cta` fires an
-  event named `cart_add_clicked`.*
+- ember: _given this goal configuration, I emit this payload._
+- flame: _given this payload, a click on `.add-to-cart-cta` fires an
+  event named `cart_add_clicked`._
 
 The pairing exists because ember#171 sat undetected for a whole
 migration with both suites green. Goals moved to project-scoped tables
 server-side; the SDK payload kept serializing a legacy column and
 shipped `"goals": null`; every dashboard-created click/submit goal
 recorded zero conversions, silently, because the backend matches
-conversions on the event *name* the auto-tracker fires. ember's tests
+conversions on the event _name_ the auto-tracker fires. ember's tests
 asserted the endpoint returned experiments. This suite asserted
 auto-tracking worked — against a fixture that carried `goals: []`.
 Nothing pinned the shape they exchanged, so nothing failed.
@@ -58,8 +60,8 @@ page.
 golden instance, for one entry of the `promoted` list
 `/experiments/active` serves alongside `experiments`. Its twin is
 ember's `crates/ember-core/tests/contracts/experiments_active_promoted.json`.
-The mock answers `/assign` for it with the winner and no assignment
-row. It is not in the default response (its winner targets
+The mock's `/evaluate` answers it with the winner, and flame records
+nothing for it. It is not in the default response (its winner targets
 `#target-text`, as the script-tag experiment's treatment does), so the
 promoted specs splice it in with `page.route`.
 

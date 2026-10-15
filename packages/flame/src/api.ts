@@ -1,6 +1,5 @@
 import type {
   ActiveExperimentsResponse,
-  AssignmentResponse,
   CreateAssignmentRequest,
   CreateEventBatchRequest,
   CreateEventRequest,
@@ -86,30 +85,6 @@ export class ApiClient {
    */
   async getActiveExperiments(): Promise<ActiveExperimentsResponse> {
     return this.request<ActiveExperimentsResponse>('GET', '/experiments/active');
-  }
-
-  /**
-   * Request a variant assignment for a user
-   *
-   * POST /{api_key}/experiments/{experiment_id}/assign
-   *
-   * @param experimentId - Experiment to assign user to
-   * @param userId - User identifier (authenticated or device ID)
-   * @param context - Device context for segment-level CUPED
-   * @param identity - Identity metadata for CUPED eligibility
-   */
-  async assignVariant(
-    experimentId: string,
-    userId: string,
-    context?: UserContext,
-    identity?: IdentityMetadata
-  ): Promise<AssignmentResponse> {
-    const payload: CreateAssignmentRequest = {
-      user_id: userId,
-      context: context as unknown as Record<string, unknown>,
-      identity,
-    };
-    return this.request<AssignmentResponse>('POST', `/experiments/${experimentId}/assign`, payload);
   }
 
   /**

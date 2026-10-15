@@ -3,7 +3,8 @@
  *
  * Implements the handful of endpoints the SDK + edge middleware hit:
  *   GET  /:key/experiments/active
- *   POST /:key/experiments/:id/assign
+ *   POST /:key/evaluate              (flame#46: every arm, no enrolment)
+ *   POST /:key/experiments/:id/assign (flame-edge, older flame builds)
  *   POST /:key/identity/link
  *   POST /:key/events
  *
@@ -97,6 +98,28 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // POST /:key/evaluate (ember ADR 0041): the arm for every running
+  // experiment and promoted winner, in one answer. Enrols nobody; flame
+  // records what it delivers as a $assignment event.
+  if (rest === '/evaluate' && method === 'POST') {
+    const evaluation = (experimentId, variant) => ({
+      experiment_id: experimentId,
+      variant_id: variant.id,
+      variant_name: variant.name,
+      is_control: variant.is_control,
+      held_out: false,
+      cap_reached: false,
+      workspace_archived: false,
+    });
+    const evaluations = EXPERIMENTS.flatMap((e) => {
+      const variant = treatmentVariantFor(e.id);
+      return variant ? [evaluation(e.id, variant)] : [];
+    });
+    evaluations.push(evaluation(PROMOTED_CONTRACT.id, PROMOTED_CONTRACT.winner));
+    send(res, 200, { evaluations });
+    return;
+  }
+
   // POST /:key/experiments/:id/assign
   const assignMatch = rest.match(/^\/experiments\/([^/]+)\/assign$/);
   if (assignMatch && method === 'POST') {
@@ -143,6 +166,22 @@ const server = createServer(async (req, res) => {
     try {
       const parsed = JSON.parse(raw);
       const events = Array.isArray(parsed?.events) ? parsed.events : [];
+      // As ember does: one malformed $assignment refuses the whole envelope,
+      // pageview included, so a bad record fails the suite here too.
+      const bad = events.findIndex(
+        (e) =>
+          e?.event_type === '$assignment' &&
+          !(
+            typeof e.metadata?.experiment_id === 'string' &&
+            e.metadata.experiment_id &&
+            typeof e.metadata?.variant_id === 'string' &&
+            e.metadata.variant_id
+          )
+      );
+      if (bad !== -1) {
+        send(res, 400, { error: `events[${bad}]: $assignment: malformed metadata` });
+        return;
+      }
       recordedEvents.push(...events);
     } catch {
       // ignore malformed bodies — the SDK always sends the envelope

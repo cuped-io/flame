@@ -329,7 +329,7 @@ export interface ActiveExperimentsResponse {
 
 /**
  * A concluded experiment whose winning variant is served to everyone not
- * held out. The SDK still asks `/assign` (the Holdout gate runs first) but
+ * held out. The SDK still asks `/evaluate` (the Holdout gate runs first) but
  * tracks nothing for it: its results are frozen.
  */
 export interface PromotedExperiment {

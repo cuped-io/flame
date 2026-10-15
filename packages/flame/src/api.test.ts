@@ -108,46 +108,39 @@ describe('ApiClient', () => {
     });
   });
 
-  describe('assignVariant', () => {
-    it('should request variant assignment', async () => {
-      const mockResponse = {
-        assignment_id: 'assign-1',
-        experiment_id: 'exp-1',
-        variant_id: 'variant-1',
-        variant_name: 'Control',
-        is_control: true,
-        assigned_at: '2024-01-01T00:00:00Z',
-      };
+  describe('evaluate', () => {
+    const mockResponse = {
+      evaluations: [
+        {
+          experiment_id: 'exp-1',
+          variant_id: 'variant-1',
+          variant_name: 'Control',
+          is_control: true,
+          held_out: false,
+          cap_reached: false,
+          workspace_archived: false,
+        },
+      ],
+    };
 
+    it('asks for every arm in one POST /evaluate', async () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(JSON.stringify(mockResponse)),
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const result = await client.assignVariant('exp-1', 'user-123');
+      const result = await client.evaluate('user-123');
 
       expect(result).toEqual(mockResponse);
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://api.cuped.io/pk_live_abc123/experiments/exp-1/assign',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: 'user-123' }),
-        }
-      );
+      expect(fetchMock).toHaveBeenCalledWith('https://api.cuped.io/pk_live_abc123/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: 'user-123' }),
+      });
     });
 
-    it('should include context when provided', async () => {
-      const mockResponse = {
-        assignment_id: 'assign-1',
-        experiment_id: 'exp-1',
-        variant_id: 'variant-1',
-        variant_name: 'Control',
-        is_control: true,
-        assigned_at: '2024-01-01T00:00:00Z',
-      };
-
+    it('sends context and identity when provided', async () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(JSON.stringify(mockResponse)),
@@ -166,29 +159,27 @@ describe('ApiClient', () => {
         touchSupported: true,
         cookiesEnabled: true,
       };
-      await client.assignVariant('exp-1', 'user-123', context);
+      const identity = { type: 'device' as const, device_id: 'd_1' };
+      await client.evaluate('user-123', context, identity);
 
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://api.cuped.io/pk_live_abc123/experiments/exp-1/assign',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: 'user-123', context }),
-        }
-      );
+      expect(fetchMock).toHaveBeenCalledWith('https://api.cuped.io/pk_live_abc123/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: 'user-123', context, identity }),
+      });
     });
 
-    it('should throw error on failed assignment', async () => {
+    it('throws on a failed evaluation', async () => {
       fetchMock.mockResolvedValueOnce({
         ok: false,
-        status: 404,
-        text: () => Promise.resolve('Experiment not found'),
+        status: 500,
+        text: () => Promise.resolve('Internal Server Error'),
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
 
-      await expect(client.assignVariant('exp-1', 'user-123')).rejects.toThrow(
-        'API request failed: 404 Experiment not found'
+      await expect(client.evaluate('user-123')).rejects.toThrow(
+        'API request failed: 500 Internal Server Error'
       );
     });
   });

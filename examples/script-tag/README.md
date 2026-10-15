@@ -37,16 +37,16 @@ snippet of the variant change that targets it.
 In your cuped dashboard, create one experiment per change type (or
 one with multiple changes per variant). Match variants up like:
 
-| Section | Selector | Suggested variant change |
-|---|---|---|
-| 1. text | `#target-text` | `{ type: "text", selector: "#target-text", value: "Replaced!" }` |
-| 2. html | `#target-html` | `{ type: "html", selector: "#target-html", value: "<strong>Replaced markup</strong>" }` |
-| 3. attribute | `#target-attribute` | `{ type: "attribute", selector: "#target-attribute", attribute: "href", value: "https://example.com/new" }` |
-| 4. class | `#target-class` | `{ type: "class", selector: "#target-class", add: ["new-class"], remove: ["remove-me"] }` |
-| 5. style | `#target-style` | `{ type: "style", selector: "#target-style", styles: { "color": "#10b981", "font-weight": "700" } }` |
-| 6. css | (no selector — global) | `{ type: "css", css: ".target-css { background: #fef3c7; }" }` |
-| 7. visibility | `#target-visibility` | `{ type: "visibility", selector: "#target-visibility", visible: false }` |
-| 8. redirect | (no selector) | `{ type: "redirect", url: "/some-page" }` |
+| Section       | Selector               | Suggested variant change                                                                                    |
+| ------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| 1. text       | `#target-text`         | `{ type: "text", selector: "#target-text", value: "Replaced!" }`                                            |
+| 2. html       | `#target-html`         | `{ type: "html", selector: "#target-html", value: "<strong>Replaced markup</strong>" }`                     |
+| 3. attribute  | `#target-attribute`    | `{ type: "attribute", selector: "#target-attribute", attribute: "href", value: "https://example.com/new" }` |
+| 4. class      | `#target-class`        | `{ type: "class", selector: "#target-class", add: ["new-class"], remove: ["remove-me"] }`                   |
+| 5. style      | `#target-style`        | `{ type: "style", selector: "#target-style", styles: { "color": "#10b981", "font-weight": "700" } }`        |
+| 6. css        | (no selector — global) | `{ type: "css", css: ".target-css { background: #fef3c7; }" }`                                              |
+| 7. visibility | `#target-visibility`   | `{ type: "visibility", selector: "#target-visibility", visible: false }`                                    |
+| 8. redirect   | (no selector)          | `{ type: "redirect", url: "/some-page" }`                                                                   |
 
 Status: `running`. Set the user to the variant of your choice from
 the dashboard or just take whichever assignment you get on first
@@ -57,8 +57,9 @@ visit.
 1. **flame loads.** Console shows `[Flame] Initialized` debug logs.
    `window.flame` is defined.
 2. **API calls fire.** Network tab shows
-   `GET /:dsn/experiments/active` and
-   `POST /:dsn/experiments/:id/assign` per experiment.
+   `GET /:dsn/experiments/active` and one `POST /:dsn/evaluate` for
+   every experiment. The visitor is counted when flame shows the variant:
+   a `$assignment` event in the next `POST /:dsn/events`.
 3. **The target element changes** match the configured variant change.
 4. **Identity is persistent.** "Show identity" button dumps the
    device id; reload → same id.
@@ -83,6 +84,7 @@ steps on a production target:
 
 Caveats for sites with async-rendered DOM (e.g. Shopify themes,
 SPAs):
+
 - flame's `DOMContentLoaded` hook catches most pages, but for
   elements rendered by a framework after page load you may see a
   brief flicker of the original.
