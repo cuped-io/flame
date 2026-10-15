@@ -54,9 +54,25 @@ function evaluation(experimentId: string, arm: 'control' | 'treatment'): Experim
   };
 }
 
+type SentEvent = {
+  user_id: string;
+  event_type: string;
+  metadata?: Record<string, unknown>;
+  experiment_assignments?: { experiment_id: string; variant_id: string }[];
+  occurred_at?: string;
+};
+
+/** Every event flame sends to /events, in order. jsdom has no sendBeacon, so they go by fetch. */
+let sent: SentEvent[] = [];
+const records = () => sent.filter((e) => e.event_type === '$assignment');
+
 function stubApi(experiments: Experiment[], evaluations: ExperimentEvaluation[]) {
-  const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith('/events') && init?.body) {
+      sent.push(...(JSON.parse(String(init.body)).events as SentEvent[]));
+      return new Response(null, { status: 204 });
+    }
     if (url.endsWith('/experiments/active')) {
       return new Response(JSON.stringify({ experiments }), { status: 200 });
     }
@@ -82,6 +98,7 @@ const fresh = () => {
 };
 
 beforeEach(() => {
+  sent = [];
   localStorage.clear();
   vi.restoreAllMocks();
   document.body.innerHTML = '<h1 id="one">one original</h1><h1 id="two">two original</h1>';
@@ -183,5 +200,90 @@ describe('the arms cache', () => {
     expect(calls(fetchMock, /\/evaluate$/)).toHaveLength(1);
     expect(flame.getVariant('exp-1')).toBe('exp-1-control');
     expect(stored()['exp-1']?.variantId).toBe('exp-1-control');
+  });
+});
+
+describe('recording on delivery', () => {
+  it('records each delivered arm, control too, as a $assignment event ember accepts', async () => {
+    stubApi([EXP_1, EXP_2], [evaluation('exp-1', 'treatment'), evaluation('exp-2', 'control')]);
+    const before = Date.now();
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(records()).toHaveLength(2));
+    const byExperiment = Object.fromEntries(records().map((r) => [r.metadata?.experiment_id, r]));
+    expect(byExperiment['exp-1'].metadata?.variant_id).toBe('exp-1-treatment');
+    expect(byExperiment['exp-2'].metadata?.variant_id).toBe('exp-2-control');
+    for (const record of records()) {
+      expect(typeof record.user_id).toBe('string');
+      expect(record.user_id.length).toBeGreaterThan(0);
+      // ember dates the row from occurred_at, capped at receipt.
+      expect(Date.parse(record.occurred_at!)).toBeGreaterThanOrEqual(before - 1000);
+      // A record is not an event to attribute.
+      expect(record.experiment_assignments).toBeUndefined();
+    }
+  });
+
+  it('records a variant even when none of its changes land on the page', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const broken = makeExperiment('exp-1', '#one[');
+    stubApi([broken], [evaluation('exp-1', 'treatment')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(records()[0].metadata?.variant_id).toBe('exp-1-treatment');
+  });
+
+  it('carries the identity ember uses for CUPED eligibility', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'control')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    const identity = records()[0].metadata?.identity as { device_id?: string; type?: string };
+    expect(identity?.device_id).toBeTruthy();
+    expect(identity?.type).toBeTruthy();
+  });
+
+  it('records nothing for a held-out visitor', async () => {
+    stubApi(
+      [EXP_1],
+      [
+        {
+          ...evaluation('exp-1', 'control'),
+          variant_id: null,
+          variant_name: null,
+          is_control: null,
+          held_out: true,
+        },
+      ]
+    );
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(records()).toHaveLength(0);
+  });
+
+  it('records nothing for prehydrated arms: flame-edge records those (flame#47)', async () => {
+    stubApi([], []);
+    await fresh().init({
+      dsn: DSN,
+      enableBatching: false,
+      prehydrated: {
+        user_id: 'edge-user',
+        user_id_created_at: '2024-01-01T00:00:00Z',
+        experiments: [EXP_1],
+        assignments: {
+          'exp-1': {
+            experimentId: 'exp-1',
+            variantId: 'exp-1-treatment',
+            userId: 'edge-user',
+            assignedAt: 'x',
+          },
+        },
+      },
+    });
+
+    expect(document.getElementById('one')?.textContent).toBe('exp-1 variant');
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(records()).toHaveLength(0);
   });
 });

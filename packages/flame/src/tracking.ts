@@ -1,4 +1,10 @@
-import type { StoredAssignment, Goal, ExperimentAssignment, CreateEventRequest } from './types';
+import type {
+  StoredAssignment,
+  Goal,
+  ExperimentAssignment,
+  CreateEventRequest,
+  IdentityMetadata,
+} from './types';
 import type { ApiClient } from './api';
 import { EventQueue, type EventQueueConfig } from './queue';
 
@@ -404,4 +410,35 @@ export class TrackingManager {
   trackPageview(): void {
     this.track('pageview');
   }
+
+  /**
+   * The record step (flame#46, ember ADR 0041): the arm flame just delivered,
+   * as a reserved `$assignment` event. ember writes the visitor's assignment
+   * from it; until then they are not counted. It carries no page context and
+   * no `experiment_assignments`: it is not an event to attribute.
+   * `occurred_at` is now, which ember uses as `assigned_at`.
+   */
+  recordAssignment(
+    experimentId: string,
+    variantId: string,
+    extras: { context?: Record<string, unknown>; identity?: IdentityMetadata } = {}
+  ): void {
+    const event: CreateEventRequest = {
+      user_id: this.userId,
+      event_type: ASSIGNMENT_EVENT_TYPE,
+      metadata: { experiment_id: experimentId, variant_id: variantId, ...extras },
+      occurred_at: new Date().toISOString(),
+    };
+    if (this.debug) {
+      console.log('[Flame] Recording assignment:', event.metadata);
+    }
+    if (this.queue) {
+      this.queue.enqueue(event);
+    } else {
+      this.apiClient.trackEventsBeacon([event]);
+    }
+  }
 }
+
+/** ember's reserved event type for the record step (ADR 0041). */
+export const ASSIGNMENT_EVENT_TYPE = '$assignment';

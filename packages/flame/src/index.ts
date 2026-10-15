@@ -57,6 +57,9 @@ class Flame {
   private consentStatus: ConsentState = 'not_required';
   private applyAfterReveal = false;
   private hydrationWaitStart: number | null = null;
+  // Record each delivered arm (flame#46). Off for prehydrated arms.
+  private recordOnDelivery = false;
+  private identityMeta: IdentityMetadata | null = null;
   private domWatcher: { stop: () => void } | null = null;
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
@@ -212,6 +215,10 @@ class Flame {
           device_id: this.identity.deviceId,
           device_id_created_at: this.identity.deviceIdCreatedAt ?? undefined,
         };
+        // Evaluation enrols nobody, so flame records each arm it delivers.
+        // Prehydrated arms are not ours to record: flame-edge's (flame#47).
+        this.recordOnDelivery = true;
+        this.identityMeta = identityMeta;
 
         // Every arm and promoted winner in one `/evaluate` (flame#46), which
         // enrols nobody. A failed evaluation renders the original for every
@@ -342,6 +349,15 @@ class Flame {
         const variant = getAssignedVariant(experiment, assignment);
         if (!variant) continue;
 
+        // Delivered: count the visitor in this arm (flame#46). Recorded at the
+        // decision to apply, not on a DOM change, so control (no changes) and
+        // a variant whose change fails are counted the same way.
+        if (this.recordOnDelivery) {
+          this.trackingManager?.recordAssignment(experiment.id, variant.id, {
+            context: (this.context ?? undefined) as Record<string, unknown> | undefined,
+            identity: this.identityMeta ?? undefined,
+          });
+        }
         applySafely(variant);
       }
 

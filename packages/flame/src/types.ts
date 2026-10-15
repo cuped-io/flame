@@ -493,6 +493,8 @@ export interface CreateEventRequest {
   metadata?: Record<string, unknown>;
   /** Experiment assignments active at time of event */
   experiment_assignments?: ExperimentAssignment[];
+  /** When it happened. ember dates an event without one at receipt. */
+  occurred_at?: string;
 }
 
 /**
