@@ -49,7 +49,8 @@ export interface ResolvedAssignments {
 /**
  * The arm for every experiment, from the cache or one `POST /evaluate`
  * (flame#46). Evaluation enrols nobody, so an arm here is not yet counted:
- * flame records it when it delivers it.
+ * flame records it when it delivers it. Only a recorded arm is cached, so an
+ * arm never delivered is evaluated again, against ember's checks of the day.
  *
  * A cached arm whose variant still exists is kept, as before. `/evaluate` is
  * asked when any experiment has no cached arm, or when there are promoted
@@ -104,7 +105,6 @@ export async function resolveAssignments(
       userId,
       assignedAt: new Date().toISOString(),
     };
-    storeAssignment(assignment);
     arms.set(experiment.id, assignment);
   }
 
@@ -136,18 +136,25 @@ function getRecorded(): Record<string, string> {
 }
 
 /**
- * Whether this user's arm for the experiment was already recorded. A
- * different user or a different arm is recorded again.
+ * Which arms were already recorded, read once per delivery. It answers
+ * whether this user's arm for the experiment was recorded: a different user
+ * or a different arm is recorded again.
  */
-export function wasRecorded(experimentId: string, userId: string, variantId: string): boolean {
-  return getRecorded()[experimentId] === `${userId}:${variantId}`;
+export function recordedArms(): (
+  experimentId: string,
+  userId: string,
+  variantId: string
+) => boolean {
+  const recorded = getRecorded();
+  return (experimentId, userId, variantId) => recorded[experimentId] === `${userId}:${variantId}`;
 }
 
-/** Remember that this user's arm was recorded. */
-export function markRecorded(experimentId: string, userId: string, variantId: string): void {
+/** Remember that this user's arm was recorded, and cache it for later loads. */
+export function markRecorded(assignment: StoredAssignment): void {
+  storeAssignment(assignment);
   try {
     const recorded = getRecorded();
-    recorded[experimentId] = `${userId}:${variantId}`;
+    recorded[assignment.experimentId] = `${assignment.userId}:${assignment.variantId}`;
     localStorage.setItem(RECORDED_KEY, JSON.stringify(recorded));
   } catch {
     // No storage: this page load records again next time; ember dedupes.

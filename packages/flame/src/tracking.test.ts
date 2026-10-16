@@ -777,8 +777,31 @@ describe('recordAssignment drops a record ember would refuse', () => {
 
   it('sends a well-formed record', () => {
     const { manager, trackEventsBeacon } = sendSpy();
-    manager.recordAssignment('exp-1', 'var-1');
+    expect(manager.recordAssignment('exp-1', 'var-1')).toBe(true);
     expect(trackEventsBeacon).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the caller once the browser accepts the record, and not before', () => {
+    const trackEventsBeacon = vi.fn(() => true);
+    const manager = new TrackingManager({ trackEventsBeacon } as unknown as ApiClient, 'user-123', {
+      flushIntervalMs: 60_000,
+    });
+    const onSent = vi.fn();
+    manager.recordAssignment('exp-1', 'var-1', {}, onSent);
+    expect(onSent).not.toHaveBeenCalled();
+    manager.flush();
+    expect(onSent).toHaveBeenCalledOnce();
+    manager.discard();
+  });
+
+  it('does not tell the caller when the browser refuses an unbatched record', () => {
+    const trackEventsBeacon = vi.fn(() => false);
+    const manager = new TrackingManager({ trackEventsBeacon } as unknown as ApiClient, 'user-123', {
+      enableBatching: false,
+    });
+    const onSent = vi.fn();
+    manager.recordAssignment('exp-1', 'var-1', {}, onSent);
+    expect(onSent).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -795,7 +818,7 @@ describe('recordAssignment drops a record ember would refuse', () => {
   ])('drops a record with %s, with a warning', (_case, experimentId, variantId, extras) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { manager, trackEventsBeacon } = sendSpy();
-    manager.recordAssignment(experimentId, variantId, extras);
+    expect(manager.recordAssignment(experimentId, variantId, extras)).toBe(false);
     expect(trackEventsBeacon).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledOnce();
   });

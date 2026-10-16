@@ -98,6 +98,26 @@ const fresh = () => {
   return flame;
 };
 
+// jsdom's navigator properties live on its prototype: shadow one, then delete it.
+const overridden: string[] = [];
+function overrideNavigator(key: string, value: unknown) {
+  Object.defineProperty(navigator, key, { value, configurable: true });
+  overridden.push(key);
+}
+function restoreNavigator() {
+  for (const key of overridden.splice(0))
+    delete (navigator as unknown as Record<string, unknown>)[key];
+}
+
+// A page still parsing when flame resolves: apply waits for DOMContentLoaded.
+const stillLoading = () => {
+  Object.defineProperty(document, 'readyState', { value: 'loading', configurable: true });
+};
+const finishLoading = () => {
+  Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
+  document.dispatchEvent(new Event('DOMContentLoaded'));
+};
+
 beforeEach(() => {
   sent = [];
   localStorage.clear();
@@ -106,6 +126,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreNavigator();
+  Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
   started.splice(0).forEach((flame) => flame.reset());
   delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
 });
@@ -159,10 +181,15 @@ describe('a malformed /evaluate answer', () => {
 describe('the arms cache', () => {
   const stored = () => JSON.parse(localStorage.getItem('flame_assignments') ?? '{}');
 
-  it('caches the evaluated arm', async () => {
+  it('caches the arm once its record is sent', async () => {
     stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
-    await fresh().init({ dsn: DSN });
+    await fresh().init({ dsn: DSN, flushIntervalMs: 60_000 });
+    expect(stored()['exp-1']).toBeUndefined();
 
+    // The tab is hidden: the queue flushes, and the browser accepts the batch.
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     expect(stored()['exp-1']?.variantId).toBe('exp-1-treatment');
   });
 
@@ -196,7 +223,7 @@ describe('the arms cache', () => {
     );
     const fetchMock = stubApi([EXP_1], [evaluation('exp-1', 'control')]);
     const flame = fresh();
-    await flame.init({ dsn: DSN });
+    await flame.init({ dsn: DSN, enableBatching: false });
 
     expect(calls(fetchMock, /\/evaluate$/)).toHaveLength(1);
     expect(flame.getVariant('exp-1')).toBe('exp-1-control');
@@ -242,6 +269,29 @@ describe('recording on delivery', () => {
     const identity = records()[0].metadata?.identity as { device_id?: string; type?: string };
     expect(identity?.device_id).toBeTruthy();
     expect(identity?.type).toBeTruthy();
+  });
+
+  it('an arm whose record ember would refuse is not delivered: original, no arm, recorded later', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // A context that pushes the record past ember's 4 KB metadata cap.
+    overrideNavigator('language', 'x'.repeat(5000));
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    const flame = fresh();
+    await flame.init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(records()).toHaveLength(0);
+    expect(document.getElementById('one')?.textContent).toBe('one original');
+    expect(flame.getVariant('exp-1')).toBeNull();
+    expect(sent.every((e) => e.experiment_assignments === undefined)).toBe(true);
+
+    // The next page load, with a normal context, records and delivers it.
+    restoreNavigator();
+    started.splice(0).forEach((f) => f.reset());
+    const next = fresh();
+    await next.init({ dsn: DSN, enableBatching: false });
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(next.getVariant('exp-1')).toBe('exp-1-treatment');
   });
 
   it('records nothing for a held-out visitor', async () => {
@@ -312,6 +362,26 @@ describe('when the anti-flicker timeout wins', () => {
     expect(flame.getVariant('exp-2')).toBeNull();
   });
 
+  it("the skipped arm is not kept: the next page load follows ember's answer then", async () => {
+    revealedAlready();
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    await fresh().init({ dsn: DSN, enableBatching: false });
+    expect(records()).toHaveLength(0);
+
+    // Before the next load the visitor falls into a holdout.
+    started.splice(0).forEach((flame) => flame.reset());
+    delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
+    const fetchMock = stubApi([EXP_1], [{ ...evaluation('exp-1', 'treatment'), held_out: true }]);
+    const flame = fresh();
+    await flame.init({ dsn: DSN, enableBatching: false });
+
+    expect(calls(fetchMock, /\/evaluate$/)).toHaveLength(1);
+    await vi.waitFor(() => expect(pageviews()).toHaveLength(2));
+    expect(records()).toHaveLength(0);
+    expect(flame.getVariant('exp-1')).toBeNull();
+    expect(document.getElementById('one')?.textContent).toBe('one original');
+  });
+
   it('positive control: delivered, the pageview carries both arms', async () => {
     stubApi([EXP_1, EXP_2], [evaluation('exp-1', 'treatment'), evaluation('exp-2', 'control')]);
     await fresh().init({ dsn: DSN, enableBatching: false });
@@ -327,17 +397,6 @@ describe('when the anti-flicker timeout wins', () => {
 });
 
 describe('order: the record goes before anything tagged with its arm', () => {
-  // A page still parsing when flame resolves: apply waits for DOMContentLoaded.
-  const stillLoading = () => {
-    Object.defineProperty(document, 'readyState', { value: 'loading', configurable: true });
-  };
-  const finishLoading = () => {
-    Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
-    document.dispatchEvent(new Event('DOMContentLoaded'));
-  };
-  afterEach(() => {
-    Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
-  });
   const tagged = (e: SentEvent) =>
     e.experiment_assignments?.some((a) => a.experiment_id === 'exp-1') ?? false;
 
@@ -396,6 +455,28 @@ describe('order: the record goes before anything tagged with its arm', () => {
   });
 });
 
+describe('consent(true) on a site that does not need it', () => {
+  it('while init is waiting for delivery: init still finishes, and flame starts once', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    stillLoading();
+    const flame = fresh();
+    let done = false;
+    const init = flame.init({ dsn: DSN, enableBatching: false }).then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 20));
+
+    // The site's consent banner calls it anyway.
+    expect(flame.consent(true)).toBe('granted');
+    await new Promise((r) => setTimeout(r, 20));
+    finishLoading();
+
+    await vi.waitFor(() => expect(done).toBe(true));
+    await init;
+    expect(sent.filter((e) => e.event_type === 'pageview')).toHaveLength(1);
+    expect(records()).toHaveLength(1);
+    expect(document.getElementById('one')?.textContent).toBe('exp-1 variant');
+  });
+});
+
 describe('one record per visitor per experiment', () => {
   it('a second page load with the cached arm records nothing new', async () => {
     stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
@@ -406,6 +487,26 @@ describe('one record per visitor per experiment', () => {
     await fresh().init({ dsn: DSN, enableBatching: false });
     await vi.waitFor(() => expect(sent.filter((e) => e.event_type === 'pageview')).toHaveLength(2));
     expect(records()).toHaveLength(1);
+  });
+
+  it('a record the browser never sent is sent again on the next page load', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    // Page 1: every batch is refused, and there is no retry store to keep it.
+    const sendBeacon = vi.fn(() => false);
+    overrideNavigator('sendBeacon', sendBeacon);
+    await fresh().init({ dsn: DSN, enableOfflineStorage: false });
+    started.splice(0).forEach((flame) => flame.reset());
+    // Precondition: page 1 tried to send its record, and it was refused.
+    expect(sendBeacon).toHaveBeenCalled();
+    expect(records()).toHaveLength(0);
+
+    // Page 2: the network is back.
+    restoreNavigator();
+    await fresh().init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    const types = sent.map((e) => e.event_type);
+    expect(types.indexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
   });
 
   it('a new arm for the same experiment is recorded', async () => {

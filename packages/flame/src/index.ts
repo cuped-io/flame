@@ -5,7 +5,7 @@ import {
   resolveAssignments,
   getAssignedVariant,
   clearStoredAssignments,
-  wasRecorded,
+  recordedArms,
   markRecorded,
 } from './assignment';
 import {
@@ -71,6 +71,9 @@ class Flame {
   private recordOnDelivery = false;
   // Resolves start()'s wait once applyAllVariants has delivered or skipped.
   private onDeliveryDecided: (() => void) | null = null;
+  // The live start(). A second call joins it instead of starting again, or
+  // the first one's delivery wait would never resolve.
+  private starting: Promise<void> | null = null;
   private identityMeta: IdentityMetadata | null = null;
   private domWatcher: { stop: () => void } | null = null;
   // Events fired via track() before init() ran — buffered here and flushed
@@ -148,6 +151,7 @@ class Flame {
     this.domWatcher = null;
     this.trackingManager?.discard();
     this.trackingManager = null;
+    this.starting = null;
     this.pendingEvents = [];
     clearStoredIdentity();
     clearStoredAssignments();
@@ -163,7 +167,12 @@ class Flame {
    * `afterReveal`: started by consent on a page already showing the
    * original, so apply even though the anti-flicker hide has been lifted.
    */
-  private async start(config: FlameConfig, { afterReveal = false } = {}): Promise<void> {
+  private start(config: FlameConfig, options: { afterReveal?: boolean } = {}): Promise<void> {
+    this.starting ??= this.run(config, options);
+    return this.starting;
+  }
+
+  private async run(config: FlameConfig, { afterReveal = false } = {}): Promise<void> {
     // init() creates the client before anything can call start().
     if (!this.apiClient) return;
     this.applyAfterReveal = afterReveal;
@@ -319,6 +328,9 @@ class Flame {
       this.arms.set(experiment.id, assignment);
       // A prehydrated arm was recorded by flame-edge, so events carry it from
       // the start, as before. An evaluated one waits for delivery (flame#46).
+      // So a prehydrated arm stays registered even if the anti-flicker timeout
+      // then skips delivery. Intended for now: the edge enrols at /assign, and
+      // moving it to record on delivery is flame#47.
       if (!this.recordOnDelivery) this.registerAssignment(assignment);
       this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
     } else {
@@ -385,6 +397,7 @@ class Flame {
     };
 
     try {
+      const wasRecorded = recordedArms();
       for (const experiment of this.experiments) {
         const assignment = this.arms.get(experiment.id);
         if (!assignment) continue;
@@ -400,11 +413,20 @@ class Flame {
         if (this.recordOnDelivery) {
           const userId = this.userId ?? '';
           if (!wasRecorded(experiment.id, userId, variant.id)) {
-            this.trackingManager?.recordAssignment(experiment.id, variant.id, {
-              context: (this.context ?? undefined) as Record<string, unknown> | undefined,
-              identity: this.identityMeta ?? undefined,
-            });
-            markRecorded(experiment.id, userId, variant.id);
+            // Marked only once the record is sent; until then each page load
+            // records again, and ember ignores the duplicates.
+            const queued = this.trackingManager?.recordAssignment(
+              experiment.id,
+              variant.id,
+              {
+                context: (this.context ?? undefined) as Record<string, unknown> | undefined,
+                identity: this.identityMeta ?? undefined,
+              },
+              () => markRecorded({ ...assignment, userId })
+            );
+            // An arm flame cannot record is not delivered: the visitor sees
+            // the original, as when the anti-flicker timeout wins.
+            if (!queued) continue;
           }
           this.registerAssignment(assignment);
         }
@@ -439,26 +461,26 @@ class Flame {
     return this.config?.waitForHydration ?? reactSsrDetected();
   }
 
-  /** The assigned variants and promoted winners this visitor sees. */
-  private activeVariants(): Variant[] {
+  /** The variants of these arms, plus the promoted winners. */
+  private variantsOf(arms: Map<string, StoredAssignment>): Variant[] {
     return [
       ...this.experiments.flatMap((experiment) => {
-        const assignment = this.assignments.get(experiment.id);
-        const variant = assignment && getAssignedVariant(experiment, assignment);
+        const arm = arms.get(experiment.id);
+        const variant = arm && getAssignedVariant(experiment, arm);
         return variant ? [variant] : [];
       }),
       ...this.promotedWinners,
     ];
   }
 
+  /** The assigned variants and promoted winners this visitor sees. */
+  private activeVariants(): Variant[] {
+    return this.variantsOf(this.assignments);
+  }
+
   /** The selectors the arms about to be delivered and promoted winners change. */
   private targetSelectors(): string[] {
-    const pending = this.experiments.flatMap((experiment) => {
-      const arm = this.arms.get(experiment.id);
-      const variant = arm && getAssignedVariant(experiment, arm);
-      return variant ? [variant] : [];
-    });
-    return [...pending, ...this.promotedWinners].flatMap((v) =>
+    return this.variantsOf(this.arms).flatMap((v) =>
       (v.changes ?? []).flatMap((c) => ('selector' in c ? [c.selector] : []))
     );
   }
@@ -646,6 +668,7 @@ class Flame {
     this.experiments = [];
     this.promotedWinners = [];
     this.initialized = false;
+    this.starting = null;
     this.log('Flame SDK reset');
   }
 

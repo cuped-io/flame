@@ -80,8 +80,11 @@ export type AssignOutcome =
 
 /**
  * Assign the user to a variant. A no-variant answer is an answer, not a
- * failure: it resolves to `held_out` or `declined`, never throws. Mirrors
- * `getOrCreateAssignment` in `@cuped-io/flame`; keep the two in step.
+ * failure: it resolves to `held_out` or `declined`, never throws. Its no-variant
+ * answers match `resolveAssignments` in `@cuped-io/flame`, which now asks
+ * `/evaluate` and records an arm only when it delivers it (flame#46). This
+ * still enrols at `/assign`; moving the edge to record on delivery is
+ * flame#47.
  */
 export async function assignVariant(
   opts: FetchOpts & { experimentId: string; userId: string }

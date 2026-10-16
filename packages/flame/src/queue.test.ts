@@ -116,6 +116,35 @@ describe('EventQueue', () => {
 
       queue.stop();
     });
+
+    // flame#46: an arm counts as recorded only once its record is sent.
+    it("tells an event's sender once the browser accepts the batch carrying it", () => {
+      const mockApi = createMockApiClient();
+      const queue = new EventQueue(mockApi as never, { batchSize: 100 });
+      const onSent = vi.fn();
+
+      queue.enqueue(createEvent('$assignment'), onSent);
+      expect(onSent).not.toHaveBeenCalled();
+      queue.flush();
+      expect(onSent).toHaveBeenCalledOnce();
+      queue.flush();
+      expect(onSent).toHaveBeenCalledOnce();
+
+      queue.stop();
+    });
+
+    it('does not tell the sender when the browser refuses the batch', () => {
+      const mockApi = createMockApiClient();
+      mockApi.trackEventsBeacon.mockReturnValue(false);
+      const queue = new EventQueue(mockApi as never, { batchSize: 100 });
+      const onSent = vi.fn();
+
+      queue.enqueue(createEvent('$assignment'), onSent);
+      queue.flush();
+      expect(onSent).not.toHaveBeenCalled();
+
+      queue.stop();
+    });
   });
 
   describe('timer-based flushing', () => {

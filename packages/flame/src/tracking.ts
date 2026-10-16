@@ -417,12 +417,17 @@ export class TrackingManager {
    * from it; until then they are not counted. It carries no page context and
    * no `experiment_assignments`: it is not an event to attribute.
    * `occurred_at` is now, which ember uses as `assigned_at`.
+   *
+   * Returns false when it drops a record ember would refuse. `onSent` runs
+   * once the browser accepts the batch carrying the record; a batch kept for
+   * retry does not count, so the arm is recorded again on the next page load.
    */
   recordAssignment(
     experimentId: string,
     variantId: string,
-    extras: { context?: Record<string, unknown>; identity?: IdentityMetadata } = {}
-  ): void {
+    extras: { context?: Record<string, unknown>; identity?: IdentityMetadata } = {},
+    onSent?: () => void
+  ): boolean {
     const event: CreateEventRequest = {
       user_id: this.userId,
       event_type: ASSIGNMENT_EVENT_TYPE,
@@ -440,16 +445,17 @@ export class TrackingManager {
           : null;
     if (refusal) {
       console.warn(`[Flame] Not recording an assignment ember would refuse (${refusal}).`);
-      return;
+      return false;
     }
     if (this.debug) {
       console.log('[Flame] Recording assignment:', event.metadata);
     }
     if (this.queue) {
-      this.queue.enqueue(event);
-    } else {
-      this.apiClient.trackEventsBeacon([event]);
+      this.queue.enqueue(event, onSent);
+    } else if (this.apiClient.trackEventsBeacon([event])) {
+      onSent?.();
     }
+    return true;
   }
 }
 

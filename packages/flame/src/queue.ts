@@ -63,6 +63,8 @@ export interface EventQueueConfig {
 export class EventQueue {
   private apiClient: ApiClient;
   private queue: CreateEventRequest[] = [];
+  // Told once the browser accepts the batch carrying their event (flame#46).
+  private onSent = new Map<CreateEventRequest, () => void>();
   private batchSize: number;
   private flushIntervalMs: number;
   private debug: boolean;
@@ -172,8 +174,9 @@ export class EventQueue {
    *
    * If the queue reaches the batch size threshold, it will be flushed immediately.
    */
-  enqueue(event: CreateEventRequest): void {
+  enqueue(event: CreateEventRequest, onSent?: () => void): void {
     this.queue.push(event);
+    if (onSent) this.onSent.set(event, onSent);
     this.log('Enqueued event', {
       eventType: event.event_type,
       queueSize: this.queue.length,
@@ -207,6 +210,7 @@ export class EventQueue {
     if (success) {
       this.queue = []; // Clear only on success
       this.log('Flush successful');
+      for (const event of events) this.onSent.get(event)?.();
     } else {
       // Persist for retry
       this.log('Flush failed, persisting to offline storage');
@@ -214,6 +218,8 @@ export class EventQueue {
       this.queue = []; // Clear in-memory queue after persisting
       this.scheduleRetry();
     }
+    // A persisted event's sender is not told: it sends again next page load.
+    for (const event of events) this.onSent.delete(event);
   }
 
   /**
@@ -284,6 +290,7 @@ export class EventQueue {
   clear(): void {
     const count = this.queue.length;
     this.queue = [];
+    this.onSent.clear();
     this.log('Cleared queue', { droppedCount: count });
   }
 
