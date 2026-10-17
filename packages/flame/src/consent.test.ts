@@ -32,8 +32,11 @@ const experiment: Experiment = {
 
 type Call = { url: string; body: unknown };
 
-/** Every request flame makes, by fetch or sendBeacon, lands in `calls`. */
-function stubApi() {
+/**
+ * Every request flame makes, by fetch or sendBeacon, lands in `calls`.
+ * `evaluateGate`: `/evaluate` answers only once it resolves.
+ */
+function stubApi(evaluateGate?: Promise<void>) {
   const calls: Call[] = [];
   vi.stubGlobal(
     'fetch',
@@ -44,6 +47,7 @@ function stubApi() {
         return new Response(JSON.stringify({ experiments: [experiment] }), { status: 200 });
       }
       if (url.endsWith('/evaluate')) {
+        await evaluateGate;
         return new Response(
           evaluateBody({
             assignment_id: 'a1',
@@ -192,6 +196,56 @@ describe('consent (flame#18)', () => {
     expect(localStorage.getItem('flame_consent')).toBe('denied');
     // The page is left as it is.
     expect(headline()).toBe('Variant headline');
+  });
+
+  // A start still waiting on the network when consent is withdrawn, or the
+  // SDK reset, must not carry on when the answer arrives.
+  function gate() {
+    let open!: () => void;
+    const opened = new Promise<void>((r) => (open = r));
+    return { opened, open };
+  }
+
+  it('consent(false) while the evaluation is in flight: the start stops, nothing changes, nothing is stored', async () => {
+    const evaluation = gate();
+    const calls = stubApi(evaluation.opened);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    flame = new Flame();
+    await flame.init({ dsn: DSN, requireConsent: true });
+    flame.consent(true);
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/evaluate'))).toBe(true));
+    const sentBefore = calls.length;
+
+    expect(flame.consent(false)).toBe('denied');
+    evaluation.open();
+    await settle();
+    // A target re-created after withdrawal stays original: no watcher.
+    document.body.innerHTML = '<h1 id="headline">Original</h1>';
+    await settle();
+
+    expect(calls.length).toBe(sentBefore);
+    expect(headline()).toBe('Original');
+    expect(flameKeys()).toEqual(['flame_consent']);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('reset() while the evaluation is in flight: the variant is not applied or recorded', async () => {
+    const evaluation = gate();
+    const calls = stubApi(evaluation.opened);
+    flame = new Flame();
+    const started = flame.init({ dsn: DSN, enableBatching: false });
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/evaluate'))).toBe(true));
+    const sentBefore = calls.length;
+
+    flame.reset();
+    evaluation.open();
+    await started;
+    await settle();
+    document.body.innerHTML = '<h1 id="headline">Original</h1>';
+    await settle();
+
+    expect(calls.length).toBe(sentBefore);
+    expect(headline()).toBe('Original');
   });
 
   it('a saved grant starts flame at init on the next page: variant from the start, no swap', async () => {

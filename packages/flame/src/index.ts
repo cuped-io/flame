@@ -74,6 +74,10 @@ class Flame {
   // The live start(). A second call joins it instead of starting again, or
   // the first one's delivery wait would never resolve.
   private starting: Promise<void> | null = null;
+  // Bumped by stopStart(). A start begun under an older generation stops at
+  // its next await, so an answer arriving after the visitor withdrew, or the
+  // SDK reset, changes nothing and records nothing.
+  private generation = 0;
   private identityMeta: IdentityMetadata | null = null;
   private domWatcher: { stop: () => void } | null = null;
   // Events fired via track() before init() ran — buffered here and flushed
@@ -151,7 +155,7 @@ class Flame {
     this.domWatcher = null;
     this.trackingManager?.discard();
     this.trackingManager = null;
-    this.starting = null;
+    this.stopStart();
     this.pendingEvents = [];
     clearStoredIdentity();
     clearStoredAssignments();
@@ -175,6 +179,8 @@ class Flame {
   private async run(config: FlameConfig, { afterReveal = false } = {}): Promise<void> {
     // init() creates the client before anything can call start().
     if (!this.apiClient) return;
+    const generation = this.generation;
+    const stopped = () => generation !== this.generation;
     this.applyAfterReveal = afterReveal;
 
     // Initialize session start time (for identity linking)
@@ -228,6 +234,7 @@ class Flame {
       } else {
         // Default path: fetch from the API.
         const response = await this.apiClient.getActiveExperiments();
+        if (stopped()) return;
         this.experiments = response.experiments;
 
         this.log(`Found ${this.experiments.length} active experiments`);
@@ -254,6 +261,7 @@ class Flame {
           this.context ?? undefined,
           identityMeta
         );
+        if (stopped()) return;
         for (const experiment of this.experiments) {
           this.registerExperiment(experiment, arms.get(experiment.id));
         }
@@ -277,9 +285,9 @@ class Flame {
         this.onDeliveryDecided = resolve;
       });
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => this.applyAllVariants());
+        document.addEventListener('DOMContentLoaded', () => this.applyAllVariants(generation));
       } else {
-        this.applyAllVariants();
+        this.applyAllVariants(generation);
       }
 
       // Start auto-tracking (includes event-based ecommerce tracking)
@@ -309,9 +317,10 @@ class Flame {
 
       await decided;
       window.removeEventListener('pagehide', onLeave);
-      // Consent may have been withdrawn while waiting: then send nothing.
+      // Consent may have been withdrawn, or the SDK reset, while waiting:
+      // then send nothing.
       const tracker = this.trackingManager as TrackingManager | null;
-      if (!tracker) return;
+      if (stopped() || !tracker) return;
 
       // Delivered arms are now registered, so these carry them.
       sendPageview(tracker);
@@ -358,6 +367,17 @@ class Flame {
     }
   }
 
+  /**
+   * Stop the live start, if any: it returns at its next await instead of
+   * applying, recording or sending. Its delivery wait is released here, since
+   * its applyAllVariants will now return before deciding.
+   */
+  private stopStart(): void {
+    this.generation++;
+    this.starting = null;
+    this.deliveryDecided();
+  }
+
   /** Lets start() send what waited for the delivery decision. Once. */
   private deliveryDecided(): void {
     const resolve = this.onDeliveryDecided;
@@ -382,7 +402,10 @@ class Flame {
    * swap on an already-visible page would itself be a flash, so those
    * visitors stay on control. No-op when no anti-flicker snippet is present.
    */
-  private applyAllVariants(): void {
+  private applyAllVariants(generation: number): void {
+    // Withdrawn or reset since this start began: withdraw() and reset() have
+    // already released its delivery wait, so only stop.
+    if (generation !== this.generation) return;
     const af = this.getAntiflicker();
 
     // Timeout already revealed the original → don't apply late (would flash).
@@ -397,7 +420,7 @@ class Flame {
     if (this.shouldWaitForHydration() && !targetsHydrated(this.targetSelectors())) {
       this.hydrationWaitStart ??= Date.now();
       if (Date.now() - this.hydrationWaitStart < HYDRATION_TIMEOUT_MS) {
-        setTimeout(() => this.applyAllVariants(), HYDRATION_POLL_MS);
+        setTimeout(() => this.applyAllVariants(generation), HYDRATION_POLL_MS);
         return;
       }
       this.log('React did not hydrate the targets in time; applying anyway');
@@ -684,7 +707,7 @@ class Flame {
     this.experiments = [];
     this.promotedWinners = [];
     this.initialized = false;
-    this.starting = null;
+    this.stopStart();
     this.log('Flame SDK reset');
   }
 
