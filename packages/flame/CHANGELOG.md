@@ -1,5 +1,15 @@
 # @cuped-io/flame
 
+## 0.7.0
+
+### Minor Changes
+
+- e405615: Visitors are counted in a variant only once they are shown it. flame now asks cuped once for every experiment (`POST /evaluate`) and records a visitor's variant with a `$assignment` event at the moment it applies it, control included. A visitor whose page the anti-flicker timeout revealed before flame was ready sees the original and is no longer counted in a variant they never saw, and their events carry no experiment. The record goes out before the pageview and any event tagged with that variant, once per visitor per experiment. `init()` now resolves after the variants are applied or skipped, which on a page waiting for React to hydrate can be up to 5 seconds later. The first pageview waits for that decision too; a visitor who leaves before it still sends the pageview and any events buffered before `init()`, with no experiment, since they never saw the variant. Events fired during the wait (clicks, form submits, `track()` calls) also carry no experiment: they happened before the visitor saw the variant, so they are not counted in its results. Requires a cuped API that serves `/evaluate`. Pages using `@cuped-io/flame-edge` are unchanged.
+
+### Patch Changes
+
+- ebca101: Withdrawing consent, or calling `reset()`, while flame is still fetching experiments now stops that start. Before, the answer arriving afterwards still registered the visitor's arms, applied promoted winners, watched the page for re-created targets and logged "Failed to initialize"; after a `reset()` it also applied the variant and sent its `$assignment` record.
+
 ## 0.6.0
 
 ### Minor Changes
