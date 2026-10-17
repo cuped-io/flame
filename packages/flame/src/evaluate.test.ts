@@ -426,6 +426,33 @@ describe('order: the record goes before anything tagged with its arm', () => {
     expect(tagged(sent.find((e) => e.event_type === 'early_signup')!)).toBe(true);
   });
 
+  it('leaving before delivery still sends the pageview and buffered events, with no arm (batching on)', async () => {
+    stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
+    stillLoading();
+    const flame = fresh();
+    flame.track('early_signup'); // before init: buffered (#20)
+    const init = flame.init({ dsn: DSN, flushIntervalMs: 60_000 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent).toHaveLength(0);
+
+    // The visitor leaves while flame waits for the page to finish loading.
+    window.dispatchEvent(new Event('pagehide'));
+
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(sent.map((e) => e.event_type).sort()).toEqual(['early_signup', 'pageview']);
+    expect(sent.every((e) => e.experiment_assignments === undefined)).toBe(true);
+
+    // A page restored from the back/forward cache finishes as usual: the arm
+    // is recorded and delivered, and the pageview is not sent twice.
+    finishLoading();
+    await init;
+    flame.track('later');
+    window.dispatchEvent(new Event('pagehide'));
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(sent.filter((e) => e.event_type === 'pageview')).toHaveLength(1);
+    expect(tagged(sent.find((e) => e.event_type === 'later')!)).toBe(true);
+  });
+
   it('a tab-hide flush while waiting sends no untagged pageview (batching on)', async () => {
     stubApi([EXP_1], [evaluation('exp-1', 'treatment')]);
     stillLoading();

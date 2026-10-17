@@ -285,20 +285,36 @@ class Flame {
       // Start auto-tracking (includes event-based ecommerce tracking)
       this.trackingManager.startAutoTracking();
 
+      // Flush events buffered before init ran (#20), then the initial
+      // pageview. Once: after delivery, or when the visitor leaves first.
+      let pageviewSent = false;
+      const sendPageview = (tracker: TrackingManager) => {
+        if (pageviewSent) return;
+        pageviewSent = true;
+        for (const event of this.pendingEvents) {
+          tracker.track(event.eventType, event.metadata);
+        }
+        this.pendingEvents = [];
+        tracker.trackPageview();
+      };
+      // A visitor who leaves before the decision never saw the variant, so
+      // their pageview goes out now, with no arm, rather than not at all.
+      // The queue's own pagehide flush has already run, so flush again.
+      const onLeave = () => {
+        if (!this.trackingManager) return;
+        sendPageview(this.trackingManager);
+        this.trackingManager.flush();
+      };
+      window.addEventListener('pagehide', onLeave);
+
       await decided;
+      window.removeEventListener('pagehide', onLeave);
       // Consent may have been withdrawn while waiting: then send nothing.
       const tracker = this.trackingManager as TrackingManager | null;
       if (!tracker) return;
 
-      // Flush events buffered before init ran (#20). Delivered arms are now
-      // registered, so they carry the active experiment context.
-      for (const event of this.pendingEvents) {
-        tracker.track(event.eventType, event.metadata);
-      }
-      this.pendingEvents = [];
-
-      // Track initial pageview
-      tracker.trackPageview();
+      // Delivered arms are now registered, so these carry them.
+      sendPageview(tracker);
 
       this.initialized = true;
       this.log('Flame SDK initialized successfully');
