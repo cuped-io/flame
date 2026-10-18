@@ -313,6 +313,12 @@ export interface Experiment {
   updated_at: string;
   /** Available variants (included in active experiments response) */
   variants?: Variant[];
+  /**
+   * The pages this experiment runs on, in the goals' `url_pattern` syntax
+   * (flame#50). A visitor is assigned and counted only on a matching page.
+   * `null` or absent: every page.
+   */
+  url_pattern?: string | null;
 }
 
 /**

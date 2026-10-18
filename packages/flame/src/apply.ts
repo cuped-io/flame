@@ -227,8 +227,8 @@ export function applyVariant(variant: Variant, debug = false): void {
   // If any change is a redirect, fire it first and short-circuit.
   // Other changes are pointless once we're navigating away.
   const redirect = variant.changes.find((c): c is RedirectChange => c.type === 'redirect');
-  // Experiments have no page targeting, so the variant also runs on the
-  // redirect's own destination. Redirecting there again loops forever
+  // An experiment with no url_pattern, or one matching both pages, also runs
+  // on the redirect's own destination. Redirecting there again loops forever
   // (flame#37): treat the redirect as done and apply the other changes.
   const alreadyThere =
     !!redirect &&

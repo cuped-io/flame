@@ -414,7 +414,9 @@ export class TrackingManager {
   /**
    * The record step (flame#46, ember ADR 0041): the arm flame just delivered,
    * as a reserved `$assignment` event. ember writes the visitor's assignment
-   * from it; until then they are not counted. It carries no page context and
+   * from it; until then they are not counted. Its `path` is the page it was
+   * delivered on, which ember checks against the experiment's `url_pattern`
+   * (flame#50). It carries no other page context and
    * no `experiment_assignments`: it is not an event to attribute.
    * `occurred_at` is now, which ember uses as `assigned_at`.
    *
@@ -425,7 +427,7 @@ export class TrackingManager {
   recordAssignment(
     experimentId: string,
     variantId: string,
-    extras: { context?: Record<string, unknown>; identity?: IdentityMetadata } = {},
+    extras: { context?: Record<string, unknown>; identity?: IdentityMetadata; path?: string } = {},
     onSent?: () => void
   ): boolean {
     const event: CreateEventRequest = {

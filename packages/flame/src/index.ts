@@ -30,6 +30,8 @@ import {
   targetsHydrated,
 } from './hydration';
 import { watchForFreshTargets } from './reapply';
+import { onThisPage } from './url-pattern';
+import { watchPathChanges } from './navigation';
 import {
   initialConsentState,
   consentAllowsRunning,
@@ -78,6 +80,9 @@ class Flame {
   private generation = 0;
   private identityMeta: IdentityMetadata | null = null;
   private domWatcher: { stop: () => void } | null = null;
+  private navigationWatcher: { stop: () => void } | null = null;
+  // Experiments whose arm was applied on this page load (flame#50).
+  private applied = new Set<string>();
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
   private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
@@ -149,8 +154,7 @@ class Flame {
    */
   private withdraw(): ConsentState {
     // No more page changes after withdrawal, promoted winners included (#45).
-    this.domWatcher?.stop();
-    this.domWatcher = null;
+    this.stopWatching();
     this.trackingManager?.discard();
     this.trackingManager = null;
     this.stopStart();
@@ -417,52 +421,10 @@ class Flame {
       this.log('React did not hydrate the targets in time; applying anyway');
     }
 
-    // One variant's failure must not stop the others or the reveal (flame#35).
-    const applySafely = (variant: Variant) => {
-      try {
-        applyVariant(variant, this.config?.debug);
-      } catch (error) {
-        console.warn(`[Flame] Failed to apply variant ${variant.id}:`, error);
-      }
-    };
-
     try {
-      const wasRecorded = recordedArms();
-      for (const experiment of this.experiments) {
-        const assignment = this.arms.get(experiment.id);
-        if (!assignment) continue;
-
-        const variant = getAssignedVariant(experiment, assignment);
-        if (!variant) continue;
-
-        // Delivered: count the visitor in this arm (flame#46). Recorded at the
-        // decision to apply, not on a DOM change, so control (no changes) and
-        // a variant whose change fails are counted the same way.
-        // Recorded before it is registered, so no event carries an arm ember
-        // has not been told about.
-        const userId = this.userId ?? '';
-        if (!wasRecorded(experiment.id, userId, variant.id)) {
-          // Marked only once the record is sent; until then each page load
-          // records again, and ember ignores the duplicates.
-          const queued = this.trackingManager?.recordAssignment(
-            experiment.id,
-            variant.id,
-            {
-              context: (this.context ?? undefined) as Record<string, unknown> | undefined,
-              identity: this.identityMeta ?? undefined,
-            },
-            () => markRecorded({ ...assignment, userId })
-          );
-          // An arm flame cannot record is not delivered: the visitor sees
-          // the original, as when the anti-flicker timeout wins.
-          if (!queued) continue;
-        }
-        this.registerAssignment(assignment);
-        applySafely(variant);
-      }
-
+      this.deliverArms();
       for (const winner of this.promotedWinners) {
-        applySafely(winner);
+        this.applySafely(winner);
       }
     } finally {
       af?.reveal();
@@ -470,6 +432,79 @@ class Flame {
     }
 
     this.watchForFreshTargets();
+    this.watchNavigation();
+  }
+
+  /**
+   * Deliver each arm whose experiment runs on the current page: record it if
+   * this user's arm was never recorded, register it, and apply it once per
+   * page load. Runs at init and on each client-side navigation (flame#50).
+   */
+  private deliverArms(): void {
+    const wasRecorded = recordedArms();
+    const userId = this.userId ?? '';
+    for (const experiment of this.experiments) {
+      const assignment = this.arms.get(experiment.id);
+      if (!assignment) continue;
+
+      const variant = getAssignedVariant(experiment, assignment);
+      if (!variant) continue;
+      // Not this page's experiment (flame#50): the visitor is not assigned
+      // here. One already counted on a matching page still carries the arm,
+      // so a conversion here is attributed, but sees no change.
+      if (!onThisPage(experiment)) {
+        if (wasRecorded(experiment.id, userId, variant.id)) this.registerAssignment(assignment);
+        continue;
+      }
+
+      // Delivered: count the visitor in this arm (flame#46). Recorded at the
+      // decision to apply, not on a DOM change, so control (no changes) and
+      // a variant whose change fails are counted the same way.
+      // Recorded before it is registered, so no event carries an arm ember
+      // has not been told about.
+      if (!wasRecorded(experiment.id, userId, variant.id)) {
+        // Marked only once the record is sent; until then each page load
+        // records again, and ember ignores the duplicates.
+        const queued = this.trackingManager?.recordAssignment(
+          experiment.id,
+          variant.id,
+          {
+            context: (this.context ?? undefined) as Record<string, unknown> | undefined,
+            identity: this.identityMeta ?? undefined,
+            path: window.location.pathname,
+          },
+          () => markRecorded({ ...assignment, userId })
+        );
+        // An arm flame cannot record is not delivered: the visitor sees
+        // the original, as when the anti-flicker timeout wins.
+        if (!queued) continue;
+      }
+      this.registerAssignment(assignment);
+      // Once per page load: a target re-created later is the watcher's (#45).
+      if (this.applied.has(experiment.id)) continue;
+      this.applied.add(experiment.id);
+      this.applySafely(variant);
+    }
+  }
+
+  /** One variant's failure must not stop the others or the reveal (flame#35). */
+  private applySafely(variant: Variant): void {
+    try {
+      applyVariant(variant, this.config?.debug);
+    } catch (error) {
+      console.warn(`[Flame] Failed to apply variant ${variant.id}:`, error);
+    }
+  }
+
+  /**
+   * A single-page app changes its URL without a page load: deliver the arms
+   * of experiments that now match (flame#50). Only when an experiment has a
+   * pattern, so other sites' history is left alone.
+   */
+  private watchNavigation(): void {
+    if (this.navigationWatcher || typeof window === 'undefined') return;
+    if (!this.experiments.some((e) => e.url_pattern)) return;
+    this.navigationWatcher = watchPathChanges(() => this.deliverArms());
   }
 
   /**
@@ -484,17 +519,25 @@ class Flame {
     this.domWatcher = watchForFreshTargets(() => this.activeVariants(), this.config?.debug);
   }
 
+  /** No more page changes: neither re-applies nor navigation deliveries. */
+  private stopWatching(): void {
+    this.domWatcher?.stop();
+    this.domWatcher = null;
+    this.navigationWatcher?.stop();
+    this.navigationWatcher = null;
+  }
+
   /** The opt-in when set; otherwise whether the page is React SSR. */
   private shouldWaitForHydration(): boolean {
     return this.config?.waitForHydration ?? reactSsrDetected();
   }
 
-  /** The variants of these arms, plus the promoted winners. */
+  /** The variants of these arms on this page (flame#50), plus the promoted winners. */
   private variantsOf(arms: Map<string, StoredAssignment>): Variant[] {
     return [
       ...this.experiments.flatMap((experiment) => {
         const arm = arms.get(experiment.id);
-        const variant = arm && getAssignedVariant(experiment, arm);
+        const variant = arm && onThisPage(experiment) && getAssignedVariant(experiment, arm);
         return variant ? [variant] : [];
       }),
       ...this.promotedWinners,
@@ -687,12 +730,12 @@ class Flame {
    * Reset all assignments and rollback changes
    */
   reset(): void {
-    this.domWatcher?.stop();
-    this.domWatcher = null;
+    this.stopWatching();
     rollbackChanges();
     this.trackingManager?.stopAutoTracking();
     this.arms.clear();
     this.assignments.clear();
+    this.applied.clear();
     this.experiments = [];
     this.promotedWinners = [];
     this.initialized = false;

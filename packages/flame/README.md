@@ -86,6 +86,10 @@ flame.reset()
 
 When using the script-tag flow, variants can apply 8 change types to the DOM via CSS selectors: `text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`, `redirect`. Configured in the cuped.io dashboard.
 
+## Page targeting
+
+An experiment can set a URL pattern in the cuped.io dashboard, using the same syntax as goals: `/pricing`, `/product/*` (one segment), `/checkout/**` (the path and anything beneath it), or `**/confirmation` (any path ending in it). flame assigns, counts and changes a visitor only on a page whose path matches. On other pages the experiment is skipped, but a visitor already counted keeps their variant on their events, so a conversion on another page is still attributed. Single-page apps are re-checked when the URL changes through `history.pushState`, `history.replaceState` or back/forward. An experiment with no pattern runs on every page.
+
 ## Documentation
 
 - [Script-tag SDK](https://cuped.io/docs/sdk)
