@@ -49,9 +49,7 @@ function evaluation(experimentId: string, arm: 'control' | 'treatment'): Experim
     variant_id: `${experimentId}-${arm}`,
     variant_name: arm === 'control' ? 'Control' : 'Treatment',
     is_control: arm === 'control',
-    held_out: false,
-    cap_reached: false,
-    workspace_archived: false,
+    resolution: 'assigned',
   };
 }
 
@@ -175,6 +173,18 @@ describe('a malformed /evaluate answer', () => {
     expect(flame.isInitialized()).toBe(true);
     expect(document.getElementById('one')?.textContent).toBe('one original');
     expect(flame.getVariant('exp-1')).toBeNull();
+  });
+
+  it('an answer with no resolution (an older cuped API) renders the original and records nothing', async () => {
+    const older = { ...evaluation('exp-1', 'treatment'), resolution: undefined };
+    stubApi([EXP_1], [older as unknown as ExperimentEvaluation]);
+    const flame = fresh();
+    await flame.init({ dsn: DSN, enableBatching: false });
+
+    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
+    expect(records()).toHaveLength(0);
+    expect(flame.getVariant('exp-1')).toBeNull();
+    expect(document.getElementById('one')?.textContent).toBe('one original');
   });
 });
 
@@ -303,7 +313,7 @@ describe('recording on delivery', () => {
           variant_id: null,
           variant_name: null,
           is_control: null,
-          held_out: true,
+          resolution: 'held_out',
         },
       ]
     );
@@ -371,7 +381,10 @@ describe('when the anti-flicker timeout wins', () => {
     // Before the next load the visitor falls into a holdout.
     started.splice(0).forEach((flame) => flame.reset());
     delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
-    const fetchMock = stubApi([EXP_1], [{ ...evaluation('exp-1', 'treatment'), held_out: true }]);
+    const fetchMock = stubApi(
+      [EXP_1],
+      [{ ...evaluation('exp-1', 'treatment'), resolution: 'held_out' }]
+    );
     const flame = fresh();
     await flame.init({ dsn: DSN, enableBatching: false });
 
@@ -573,7 +586,13 @@ describe('promoted winners', () => {
       if (url.endsWith('/evaluate')) {
         return new Response(
           JSON.stringify({
-            evaluations: [{ ...evaluation('exp-p', 'treatment'), variant_id: 'winner-1' }],
+            evaluations: [
+              {
+                ...evaluation('exp-p', 'treatment'),
+                variant_id: 'winner-1',
+                resolution: 'promoted_winner',
+              },
+            ],
           }),
           { status: 200 }
         );

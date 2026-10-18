@@ -11,9 +11,7 @@ export function evaluationFrom(assign: AssignmentResponse): ExperimentEvaluation
     variant_id: assign.variant_id,
     variant_name: assign.variant_name,
     is_control: assign.is_control,
-    held_out: assign.held_out ?? false,
-    cap_reached: assign.cap_reached ?? false,
-    workspace_archived: assign.workspace_archived ?? false,
+    resolution: assign.resolution,
   };
 }
 

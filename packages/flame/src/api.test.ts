@@ -116,9 +116,7 @@ describe('ApiClient', () => {
           variant_id: 'variant-1',
           variant_name: 'Control',
           is_control: true,
-          held_out: false,
-          cap_reached: false,
-          workspace_archived: false,
+          resolution: 'assigned',
         },
       ],
     };

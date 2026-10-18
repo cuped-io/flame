@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  resolveAssignments,
-  readPrehydratedFromCookieHeader,
-} from './resolve';
+import { resolveAssignments, readPrehydratedFromCookieHeader } from './resolve';
 import { signPrehydrated, DEFAULT_COOKIE_NAME } from './cookie';
 import type { Experiment, PrehydratedState, StoredAssignment } from '@cuped-io/flame';
 
@@ -38,7 +35,8 @@ function makeRequest(headers: Record<string, string> = {}): Request {
 function mockFetch(handlers: Array<(url: string, init?: RequestInit) => Response>) {
   let i = 0;
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const handler = handlers[i++];
     if (!handler) throw new Error(`Unexpected fetch ${i}: ${url}`);
     return handler(url, init);
@@ -103,6 +101,7 @@ describe('resolveAssignments', () => {
               variant_name: 'green',
               is_control: false,
               assigned_at: assignment.assignedAt,
+              resolution: 'assigned',
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           ),
@@ -127,9 +126,7 @@ describe('resolveAssignments', () => {
   it('cold-resolves when cookie is invalid (tampered)', async () => {
     vi.stubGlobal(
       'fetch',
-      mockFetch([
-        () => new Response(JSON.stringify({ experiments: [] }), { status: 200 }),
-      ])
+      mockFetch([() => new Response(JSON.stringify({ experiments: [] }), { status: 200 })])
     );
     const result = await resolveAssignments({
       dsn: DSN,
@@ -174,6 +171,7 @@ describe('resolveAssignments', () => {
               variant_name: 'green',
               is_control: false,
               assigned_at: '2024-01-01T00:00:00Z',
+              resolution: 'assigned',
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           ),
@@ -203,15 +201,12 @@ describe('resolveAssignments', () => {
     variant_name: null,
     is_control: null,
     assigned_at: null,
-    held_out: false,
-    cap_reached: false,
-    workspace_archived: false,
   };
 
   it.each([
-    ['held out', { ...NO_VARIANT, held_out: true }],
-    ['cap reached', { ...NO_VARIANT, cap_reached: true }],
-    ['workspace archived', { ...NO_VARIANT, workspace_archived: true }],
+    ['held out', { ...NO_VARIANT, resolution: 'held_out' }],
+    ['cap reached', { ...NO_VARIANT, resolution: 'cap_reached' }],
+    ['workspace archived', { ...NO_VARIANT, resolution: 'workspace_archived' }],
   ])('resolves %s to the original immediately, with no assignment', async (_arm, body) => {
     vi.stubGlobal(
       'fetch',
@@ -254,9 +249,7 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
     variant_name: 'green',
     is_control: false,
     assigned_at: '2024-01-01T00:00:00Z',
-    held_out: false,
-    cap_reached: false,
-    workspace_archived: false,
+    resolution: 'assigned',
   };
   const REFUSED = {
     ...ASSIGNED,
@@ -266,8 +259,8 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
     is_control: null,
     assigned_at: null,
   };
-  const CAPPED = { ...REFUSED, cap_reached: true };
-  const HELD_OUT = { ...REFUSED, held_out: true };
+  const CAPPED = { ...REFUSED, resolution: 'cap_reached' };
+  const HELD_OUT = { ...REFUSED, resolution: 'held_out' };
 
   const json = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
 
@@ -367,6 +360,18 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
     vi.stubGlobal('fetch', fetchMock);
     await resolveWith(cookieFrom(result.setCookie), T0 + 2 * RETRY_AFTER - 1);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('asks again later when an older cuped API sends no resolution', async () => {
+    const older = { ...ASSIGNED, resolution: undefined };
+    const cookie = await coldResolve(older);
+    const fetchMock = mockFetch([json(ASSIGNED)]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await resolveWith(cookie, T0 + RETRY_AFTER);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
   });
 
   it('never asks again for a held-out user', async () => {

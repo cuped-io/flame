@@ -95,7 +95,10 @@ export async function resolveAssignments(
 
   for (const experiment of uncached) {
     const answer = answers.get(experiment.id);
-    if (!answer?.variant_id || answer.held_out || answer.cap_reached || answer.workspace_archived) {
+    if (
+      !answer?.variant_id ||
+      (answer.resolution !== 'assigned' && answer.resolution !== 'promoted_winner')
+    ) {
       continue;
     }
     if (!experiment.variants?.some((v) => v.id === answer.variant_id)) continue;
@@ -110,7 +113,9 @@ export async function resolveAssignments(
 
   const winners = promoted.flatMap((p) => {
     const answer = answers.get(p.id);
-    return answer && !answer.held_out && answer.variant_id === p.winner.id ? [p.winner] : [];
+    return answer?.resolution === 'promoted_winner' && answer.variant_id === p.winner.id
+      ? [p.winner]
+      : [];
   });
   return { arms, winners };
 }

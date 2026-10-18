@@ -59,6 +59,7 @@ function stubApi(exp: Experiment) {
             variant_name: 'treatment',
             is_control: false,
             assigned_at: '2024-01-01T00:00:00Z',
+            resolution: 'assigned',
           }),
           { status: 200 }
         );
@@ -269,6 +270,7 @@ describe('re-apply on DOM change (flame#45)', () => {
               variant_name: 'treatment',
               is_control: false,
               assigned_at: null,
+              resolution: 'promoted_winner',
             }),
             { status: 200 }
           );

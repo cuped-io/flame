@@ -30,16 +30,13 @@ const experiment: Experiment = {
 };
 
 // ember's 200-with-no-variant shape (ADR 0024 / 0034 / 0001).
-const NO_VARIANT: AssignmentResponse = {
+const NO_VARIANT: Omit<AssignmentResponse, 'resolution'> = {
   assignment_id: null,
   experiment_id: 'exp-1',
   variant_id: null,
   variant_name: null,
   is_control: null,
   assigned_at: null,
-  held_out: false,
-  cap_reached: false,
-  workspace_archived: false,
 };
 
 function stubApi(assign: AssignmentResponse) {
@@ -61,10 +58,10 @@ function evaluateCalls(fetchMock: ReturnType<typeof stubApi>): number {
   return fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/evaluate')).length;
 }
 
-describe.each([
-  ['held out', { ...NO_VARIANT, held_out: true }],
-  ['cap reached', { ...NO_VARIANT, cap_reached: true }],
-  ['workspace archived', { ...NO_VARIANT, workspace_archived: true }],
+describe.each<[string, AssignmentResponse]>([
+  ['held out', { ...NO_VARIANT, resolution: 'held_out' }],
+  ['cap reached', { ...NO_VARIANT, resolution: 'cap_reached' }],
+  ['workspace archived', { ...NO_VARIANT, resolution: 'workspace_archived' }],
 ])('flame.init() when %s', (_arm, response) => {
   beforeEach(() => {
     localStorage.clear();

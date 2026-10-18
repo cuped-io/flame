@@ -786,6 +786,7 @@ export type {
   IdentityType,
   AliasType,
   ExperimentAssignment,
+  Resolution,
   CreateEventRequest,
   CreateEventBatchRequest,
   EventResponse,

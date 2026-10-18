@@ -371,7 +371,7 @@ test('keeps the original for a visitor held out of a promoted winner', async ({ 
       json: {
         evaluations: body.evaluations.map((e) =>
           e.experiment_id === PROMOTED_CONTRACT.id
-            ? { ...e, variant_id: null, variant_name: null, is_control: null, held_out: true }
+            ? { ...e, variant_id: null, variant_name: null, is_control: null, resolution: 'held_out' }
             : e
         ),
       },

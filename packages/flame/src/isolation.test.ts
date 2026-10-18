@@ -47,6 +47,7 @@ function assigned(id: string): AssignmentResponse {
     variant_name: 'treatment',
     is_control: false,
     assigned_at: '2024-01-01T00:00:00Z',
+    resolution: 'assigned',
   };
 }
 

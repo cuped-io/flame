@@ -32,6 +32,7 @@ const WINNER: AssignmentResponse = {
   variant_name: 'Treatment',
   is_control: false,
   assigned_at: null,
+  resolution: 'promoted_winner',
 };
 
 // The Holdout gate runs first (ember ADR 0024).
@@ -42,7 +43,7 @@ const HELD_OUT: AssignmentResponse = {
   variant_name: null,
   is_control: null,
   assigned_at: null,
-  held_out: true,
+  resolution: 'held_out',
 };
 
 // A returning visitor's sticky row from while the experiment ran.

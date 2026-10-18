@@ -107,9 +107,7 @@ const server = createServer(async (req, res) => {
       variant_id: variant.id,
       variant_name: variant.name,
       is_control: variant.is_control,
-      held_out: false,
-      cap_reached: false,
-      workspace_archived: false,
+      resolution: 'assigned',
     });
     const evaluations = EXPERIMENTS.flatMap((e) => {
       const variant = treatmentVariantFor(e.id);

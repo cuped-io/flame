@@ -1,4 +1,4 @@
-import type { Experiment, StoredAssignment } from '@cuped-io/flame';
+import type { Experiment, Resolution, StoredAssignment } from '@cuped-io/flame';
 
 /**
  * Subset of the response shape that the cuped API's `/{api_key}/experiments/active`
@@ -15,14 +15,12 @@ interface ActiveExperimentsResponse {
 interface AssignResponse {
   assignment_id: string | null;
   experiment_id: string;
-  /** `null` when the caller is in no variant (see the flags below). */
+  /** `null` when the caller is in no variant (see `resolution`). */
   variant_id: string | null;
   variant_name: string | null;
   is_control: boolean | null;
   assigned_at: string | null;
-  held_out?: boolean;
-  cap_reached?: boolean;
-  workspace_archived?: boolean;
+  resolution: Resolution;
 }
 
 /**
@@ -99,10 +97,12 @@ export async function assignVariant(
     throw new Error(`assign failed for ${opts.experimentId}: ${res.status}`);
   }
   const body = (await res.json()) as AssignResponse;
-  if (body.held_out) return { kind: 'held_out' };
-  // A null variant with no flag set is an arm this version doesn't know;
-  // treat it as one that may lift.
-  if (body.cap_reached || body.workspace_archived || body.variant_id === null) {
+  if (body.resolution === 'held_out') return { kind: 'held_out' };
+  // A resolution this version doesn't know is treated as one that may lift.
+  if (
+    (body.resolution !== 'assigned' && body.resolution !== 'promoted_winner') ||
+    body.variant_id === null
+  ) {
     return { kind: 'declined' };
   }
   return {

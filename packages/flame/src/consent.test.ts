@@ -56,6 +56,7 @@ function stubApi(evaluateGate?: Promise<void>) {
             variant_name: 'treatment',
             is_control: false,
             assigned_at: '2024-01-01T00:00:00Z',
+            resolution: 'assigned',
           }),
           { status: 200 }
         );

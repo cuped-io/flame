@@ -375,6 +375,28 @@ export interface CreateAssignmentRequest {
 }
 
 /**
+ * Which arm answered an `/assign` or `/evaluate` call (ember#278). Exactly
+ * one per answer.
+ *
+ * - `assigned`: the caller is in a variant.
+ * - `promoted_winner`: the experiment's winner, served to everyone.
+ * - `held_out`: the caller is in the project's Holdout. Lasting.
+ * - `cap_reached`: the workspace is at its event cap and this new caller was
+ *   not enrolled. Lifts on upgrade or billing reset.
+ * - `workspace_archived`: the workspace is archived and this new caller was
+ *   not enrolled. Lifts on revive.
+ *
+ * The last three leave every variant field `null`: the caller sees the
+ * original experience.
+ */
+export type Resolution =
+  | 'assigned'
+  | 'promoted_winner'
+  | 'held_out'
+  | 'cap_reached'
+  | 'workspace_archived';
+
+/**
  * Response from the assignment endpoint (matches the cuped API)
  */
 export interface AssignmentResponse {
@@ -382,7 +404,7 @@ export interface AssignmentResponse {
   assignment_id: string | null;
   /** Experiment ID */
   experiment_id: string;
-  /** Variant ID. `null` when the caller is in no variant (see the flags below). */
+  /** Variant ID. `null` when the caller is in no variant (see `resolution`). */
   variant_id: string | null;
   /** Variant name. `null` when the caller is in no variant. */
   variant_name: string | null;
@@ -390,12 +412,8 @@ export interface AssignmentResponse {
   is_control: boolean | null;
   /** Timestamp when the assignment was made. `null` unless an assignment row was written. */
   assigned_at: string | null;
-  /** The caller is in the project's Holdout and sees the original experience. */
-  held_out?: boolean;
-  /** The workspace is at its event cap and this new caller was not enrolled. */
-  cap_reached?: boolean;
-  /** The workspace is archived and this new caller was not enrolled. */
-  workspace_archived?: boolean;
+  /** Which arm answered. */
+  resolution: Resolution;
 }
 
 /**
@@ -410,9 +428,7 @@ export interface ExperimentEvaluation {
   variant_id: string | null;
   variant_name: string | null;
   is_control: boolean | null;
-  held_out: boolean;
-  cap_reached: boolean;
-  workspace_archived: boolean;
+  resolution: Resolution;
 }
 
 /**
