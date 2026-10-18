@@ -9,18 +9,16 @@ interface ActiveExperimentsResponse {
 }
 
 /**
- * Subset of the response shape that the cuped API's
- * `/{api_key}/experiments/{id}/assign` returns.
+ * Subset of the response shape that the cuped API's `/{api_key}/evaluate`
+ * returns: one answer per running experiment and promoted winner.
  */
-interface AssignResponse {
-  assignment_id: string | null;
-  experiment_id: string;
-  /** `null` when the caller is in no variant (see `resolution`). */
-  variant_id: string | null;
-  variant_name: string | null;
-  is_control: boolean | null;
-  assigned_at: string | null;
-  resolution: Resolution;
+interface EvaluateResponse {
+  evaluations: Array<{
+    experiment_id: string;
+    /** `null` when the caller is in no variant (see `resolution`). */
+    variant_id: string | null;
+    resolution: Resolution;
+  }>;
 }
 
 /**
@@ -62,7 +60,57 @@ export async function fetchActiveExperiments(opts: FetchOpts): Promise<Experimen
 }
 
 /**
- * Outcome of an `/assign` call.
+ * Every experiment's arm for the user, from one `/evaluate` call (ember ADR
+ * 0041). Writes no assignment: the page that delivers an arm records it
+ * (flame#47). Holdout admission still happens here. Throws if the call fails
+ * or the body has no evaluations list. An experiment ember left out of the
+ * answer is missing from the map.
+ */
+export async function evaluateArms(
+  opts: FetchOpts & { userId: string }
+): Promise<Map<string, ArmOutcome>> {
+  const res = await fetch(`${opts.apiUrl}/${opts.apiKey}/evaluate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ user_id: opts.userId }),
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    throw new Error(`evaluate failed: ${res.status}`);
+  }
+  const body = (await res.json()) as EvaluateResponse;
+  if (!Array.isArray(body?.evaluations)) {
+    throw new Error('no evaluations in the evaluate response');
+  }
+  const assignedAt = new Date().toISOString();
+  return new Map(
+    body.evaluations.map((answer): [string, ArmOutcome] => {
+      if (answer.resolution === 'held_out') return [answer.experiment_id, { kind: 'held_out' }];
+      // A resolution this version doesn't know is treated as one that may lift.
+      if (
+        (answer.resolution !== 'assigned' && answer.resolution !== 'promoted_winner') ||
+        answer.variant_id === null
+      ) {
+        return [answer.experiment_id, { kind: 'declined' }];
+      }
+      return [
+        answer.experiment_id,
+        {
+          kind: 'assigned',
+          assignment: {
+            experimentId: answer.experiment_id,
+            variantId: answer.variant_id,
+            userId: opts.userId,
+            assignedAt,
+          },
+        },
+      ];
+    })
+  );
+}
+
+/**
+ * One experiment's `/evaluate` outcome.
  *
  * - `assigned`: the user is in a variant.
  * - `held_out`: the user is in the project's Holdout. Lasting — never
@@ -71,48 +119,7 @@ export async function fetchActiveExperiments(opts: FetchOpts): Promise<Experimen
  *   the original like `held_out`, but lifts on upgrade, billing reset or
  *   revive, so it is worth asking again later.
  */
-export type AssignOutcome =
+export type ArmOutcome =
   | { kind: 'assigned'; assignment: StoredAssignment }
   | { kind: 'held_out' }
   | { kind: 'declined' };
-
-/**
- * Assign the user to a variant. A no-variant answer is an answer, not a
- * failure: it resolves to `held_out` or `declined`, never throws. Its no-variant
- * answers match `resolveAssignments` in `@cuped-io/flame`, which now asks
- * `/evaluate` and records an arm only when it delivers it (flame#46). This
- * still enrols at `/assign`; moving the edge to record on delivery is
- * flame#47.
- */
-export async function assignVariant(
-  opts: FetchOpts & { experimentId: string; userId: string }
-): Promise<AssignOutcome> {
-  const res = await fetch(`${opts.apiUrl}/${opts.apiKey}/experiments/${opts.experimentId}/assign`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ user_id: opts.userId }),
-    signal: opts.signal,
-  });
-  if (!res.ok) {
-    throw new Error(`assign failed for ${opts.experimentId}: ${res.status}`);
-  }
-  const body = (await res.json()) as AssignResponse;
-  if (body.resolution === 'held_out') return { kind: 'held_out' };
-  // A resolution this version doesn't know is treated as one that may lift.
-  if (
-    (body.resolution !== 'assigned' && body.resolution !== 'promoted_winner') ||
-    body.variant_id === null
-  ) {
-    return { kind: 'declined' };
-  }
-  return {
-    kind: 'assigned',
-    assignment: {
-      experimentId: body.experiment_id,
-      variantId: body.variant_id,
-      userId: opts.userId,
-      // `null` for a promoted winner, which writes no assignment row.
-      assignedAt: body.assigned_at ?? new Date().toISOString(),
-    },
-  };
-}

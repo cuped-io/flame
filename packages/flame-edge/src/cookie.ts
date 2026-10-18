@@ -20,15 +20,15 @@ export interface SignedPayload {
   /** The data flame.init consumes. */
   state: PrehydratedState;
   /**
-   * Experiments whose assignment was declined (event cap, archived
-   * workspace) or whose `/assign` call failed, to ask about again from
+   * Experiments whose evaluation was declined (event cap, archived
+   * workspace) or left out of ember's answer, to ask about again from
    * `at` (seconds since epoch). Edge-only: never reaches flame. Absent
    * when nothing is pending.
    */
   retry?: RetryState;
 }
 
-/** Experiments to ask `/assign` about again, and when. */
+/** Experiments to ask `/evaluate` about again, and when. */
 export interface RetryState {
   experiment_ids: string[];
   at: number;

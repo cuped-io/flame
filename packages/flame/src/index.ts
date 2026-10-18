@@ -67,8 +67,6 @@ class Flame {
   private consentStatus: ConsentState = 'not_required';
   private applyAfterReveal = false;
   private hydrationWaitStart: number | null = null;
-  // Record each delivered arm (flame#46). Off for prehydrated arms.
-  private recordOnDelivery = false;
   // Resolves start()'s wait once applyAllVariants has delivered or skipped.
   private onDeliveryDecided: (() => void) | null = null;
   // The live start(). A second call joins it instead of starting again, or
@@ -219,14 +217,23 @@ class Flame {
         : 'new',
     });
 
+    // Identity metadata for CUPED, sent with /evaluate and each record.
+    const identityMeta: IdentityMetadata = {
+      type: this.identity.type,
+      device_id: this.identity.deviceId,
+      device_id_created_at: this.identity.deviceIdCreatedAt ?? undefined,
+    };
+    this.identityMeta = identityMeta;
+
     try {
+      // Either way nobody is enrolled yet: flame records each arm it delivers
+      // (flame#46), the edge's arms included (flame#47).
       if (config.prehydrated) {
-        // Edge-resolved path: skip the active-experiments + assign
-        // HTTP roundtrips and seed assignments directly. Used by the
+        // Edge-resolved path: skip the active-experiments + evaluate
+        // HTTP roundtrips and seed the arms directly. Used by the
         // React SDK's SSR flow with `@cuped-io/flame-edge`.
         this.experiments = config.prehydrated.experiments;
         this.log(`Using ${this.experiments.length} prehydrated experiments`);
-        this.recordOnDelivery = false;
 
         for (const experiment of this.experiments) {
           this.registerExperiment(experiment, config.prehydrated.assignments[experiment.id]);
@@ -238,17 +245,6 @@ class Flame {
         this.experiments = response.experiments;
 
         this.log(`Found ${this.experiments.length} active experiments`);
-
-        // Build identity metadata for CUPED
-        const identityMeta: IdentityMetadata = {
-          type: this.identity.type,
-          device_id: this.identity.deviceId,
-          device_id_created_at: this.identity.deviceIdCreatedAt ?? undefined,
-        };
-        // Evaluation enrols nobody, so flame records each arm it delivers.
-        // Prehydrated arms are not ours to record: flame-edge's (flame#47).
-        this.recordOnDelivery = true;
-        this.identityMeta = identityMeta;
 
         // Every arm and promoted winner in one `/evaluate` (flame#46), which
         // enrols nobody. A failed evaluation renders the original for every
@@ -350,13 +346,8 @@ class Flame {
     // `variantId` is checked too: flame-edge cookies signed before it learned
     // to omit variant-less users carry `variantId: null`.
     if (assignment?.variantId) {
+      // Registered only once delivered (flame#46).
       this.arms.set(experiment.id, assignment);
-      // A prehydrated arm was recorded by flame-edge, so events carry it from
-      // the start, as before. An evaluated one waits for delivery (flame#46).
-      // So a prehydrated arm stays registered even if the anti-flicker timeout
-      // then skips delivery. Intended for now: the edge enrols at /assign, and
-      // moving it to record on delivery is flame#47.
-      if (!this.recordOnDelivery) this.registerAssignment(assignment);
       this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
     } else {
       this.log(`No variant for experiment ${experiment.id} — rendering original`);
@@ -449,26 +440,24 @@ class Flame {
         // a variant whose change fails are counted the same way.
         // Recorded before it is registered, so no event carries an arm ember
         // has not been told about.
-        if (this.recordOnDelivery) {
-          const userId = this.userId ?? '';
-          if (!wasRecorded(experiment.id, userId, variant.id)) {
-            // Marked only once the record is sent; until then each page load
-            // records again, and ember ignores the duplicates.
-            const queued = this.trackingManager?.recordAssignment(
-              experiment.id,
-              variant.id,
-              {
-                context: (this.context ?? undefined) as Record<string, unknown> | undefined,
-                identity: this.identityMeta ?? undefined,
-              },
-              () => markRecorded({ ...assignment, userId })
-            );
-            // An arm flame cannot record is not delivered: the visitor sees
-            // the original, as when the anti-flicker timeout wins.
-            if (!queued) continue;
-          }
-          this.registerAssignment(assignment);
+        const userId = this.userId ?? '';
+        if (!wasRecorded(experiment.id, userId, variant.id)) {
+          // Marked only once the record is sent; until then each page load
+          // records again, and ember ignores the duplicates.
+          const queued = this.trackingManager?.recordAssignment(
+            experiment.id,
+            variant.id,
+            {
+              context: (this.context ?? undefined) as Record<string, unknown> | undefined,
+              identity: this.identityMeta ?? undefined,
+            },
+            () => markRecorded({ ...assignment, userId })
+          );
+          // An arm flame cannot record is not delivered: the visitor sees
+          // the original, as when the anti-flicker timeout wins.
+          if (!queued) continue;
         }
+        this.registerAssignment(assignment);
         applySafely(variant);
       }
 

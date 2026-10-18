@@ -322,31 +322,6 @@ describe('recording on delivery', () => {
     await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
     expect(records()).toHaveLength(0);
   });
-
-  it('records nothing for prehydrated arms: flame-edge records those (flame#47)', async () => {
-    stubApi([], []);
-    await fresh().init({
-      dsn: DSN,
-      enableBatching: false,
-      prehydrated: {
-        user_id: 'edge-user',
-        user_id_created_at: '2024-01-01T00:00:00Z',
-        experiments: [EXP_1],
-        assignments: {
-          'exp-1': {
-            experimentId: 'exp-1',
-            variantId: 'exp-1-treatment',
-            userId: 'edge-user',
-            assignedAt: 'x',
-          },
-        },
-      },
-    });
-
-    expect(document.getElementById('one')?.textContent).toBe('exp-1 variant');
-    await vi.waitFor(() => expect(sent.some((e) => e.event_type === 'pageview')).toBe(true));
-    expect(records()).toHaveLength(0);
-  });
 });
 
 describe('when the anti-flicker timeout wins', () => {

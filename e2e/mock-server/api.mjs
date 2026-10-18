@@ -4,7 +4,7 @@
  * Implements the handful of endpoints the SDK + edge middleware hit:
  *   GET  /:key/experiments/active
  *   POST /:key/evaluate              (flame#46: every arm, no enrolment)
- *   POST /:key/experiments/:id/assign (flame-edge, older flame builds)
+ *   POST /:key/experiments/:id/assign (older flame and flame-edge builds)
  *   POST /:key/identity/link
  *   POST /:key/events
  *

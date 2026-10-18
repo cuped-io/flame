@@ -9,7 +9,7 @@ import {
   DEFAULT_COOKIE_NAME,
   DEFAULT_COOKIE_TTL_SECONDS,
 } from './cookie';
-import { assignVariant, fetchActiveExperiments, parseDsn } from './api';
+import { evaluateArms, fetchActiveExperiments, parseDsn, type ArmOutcome } from './api';
 
 export interface ResolveOptions {
   /** Project DSN — the value from your project's Settings → Install Snippet (e.g. `https://YOUR_KEY@api.cuped.io`). */
@@ -77,12 +77,15 @@ const DECLINED_RETRY_SECONDS = 10 * 60;
  * Behavior:
  * 1. If a valid signed cookie is present, decode and return. If it
  *    lists declined experiments whose retry time has passed, ask
- *    `/assign` again for just those (same user), and re-sign.
- * 2. Otherwise, fetch active experiments + assign the user, sign a
+ *    `/evaluate` again for just those (same user), and re-sign.
+ * 2. Otherwise, fetch active experiments + evaluate the user, sign a
  *    new cookie, and return both.
  * 3. On network error / timeout / unverifiable cookie, return
  *    `{ prehydrated: null }`. The caller should still serve the
  *    response; client-side init will recover.
+ *
+ * Writes no assignment: the page that delivers an arm records it
+ * (flame#47), so a visitor is never counted in an experiment they never saw.
  *
  * A held-out user is resolved like an assigned one: the experiment is
  * left out of `assignments`, so the original renders, and it is never
@@ -121,12 +124,16 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
 
   try {
     if (payload?.retry) {
-      // Ask again for just the declined experiments, as the same user.
+      // Evaluate the same user again; only the declined experiments change.
       const { state, retry } = payload;
       const pending = retry.experiment_ids.filter((id) =>
         state.experiments.some((e) => e.id === id)
       );
-      const resolved = await assignAll(pending, state.user_id, fetchOpts);
+      // A failed evaluation keeps serving the cookie and backs off.
+      const outcomes = await evaluateArms({ ...fetchOpts, userId: state.user_id }).catch(
+        () => new Map<string, ArmOutcome>()
+      );
+      const resolved = sortOutcomes(pending, outcomes);
       const next: PrehydratedState = {
         ...state,
         assignments: { ...state.assignments, ...resolved.assignments },
@@ -139,10 +146,9 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
     const userIdCreatedAt = new Date(now * 1000).toISOString();
 
     const experiments = await fetchActiveExperiments(fetchOpts);
-    const resolved = await assignAll(
+    const resolved = sortOutcomes(
       experiments.map((e) => e.id),
-      userId,
-      fetchOpts
+      experiments.length ? await evaluateArms({ ...fetchOpts, userId }) : new Map()
     );
 
     const state: PrehydratedState = {
@@ -161,39 +167,22 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
 }
 
 /**
- * Assign `userId` to each experiment in parallel. Held-out experiments
- * are left out of `assignments` for good; declined and failed ones are
- * left out too but listed in `retry`, to ask about again later. One bad
- * experiment never sinks the rest.
+ * Sort each experiment's `/evaluate` outcome into the cookie. Held-out
+ * experiments are left out of `assignments` for good; declined ones, and
+ * any ember left out of its answer, are left out too but listed in
+ * `retry`, to ask about again later.
  */
-async function assignAll(
+function sortOutcomes(
   experimentIds: string[],
-  userId: string,
-  fetchOpts: { apiUrl: string; apiKey: string; signal: AbortSignal }
-): Promise<{
-  assignments: Record<string, StoredAssignment>;
-  retry: string[];
-}> {
-  const outcomes = await Promise.all(
-    experimentIds.map(async (experimentId) => {
-      try {
-        return {
-          experimentId,
-          outcome: await assignVariant({ ...fetchOpts, experimentId, userId }),
-        };
-      } catch {
-        return { experimentId, outcome: null };
-      }
-    })
-  );
-
+  outcomes: Map<string, ArmOutcome>
+): { assignments: Record<string, StoredAssignment>; retry: string[] } {
   const assignments: Record<string, StoredAssignment> = {};
   const retry: string[] = [];
-  for (const { experimentId, outcome } of outcomes) {
+  for (const experimentId of experimentIds) {
+    const outcome = outcomes.get(experimentId);
     if (outcome?.kind === 'assigned') {
       assignments[experimentId] = outcome.assignment;
     } else if (outcome?.kind !== 'held_out') {
-      // Declined, or the call failed: ask again later.
       retry.push(experimentId);
     }
   }

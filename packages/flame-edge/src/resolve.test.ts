@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolveAssignments, readPrehydratedFromCookieHeader } from './resolve';
 import { signPrehydrated, DEFAULT_COOKIE_NAME } from './cookie';
-import type { Experiment, PrehydratedState, StoredAssignment } from '@cuped-io/flame';
+import type { Experiment, PrehydratedState } from '@cuped-io/flame';
 
 const SECRET = 'test-secret-please-do-not-use';
 const DSN = 'https://0123456789abcdef0123456789abcdef@api.example.com';
@@ -26,6 +26,15 @@ const exp1: Experiment = {
       updated_at: '2024-01-01T00:00:00Z',
     },
   ],
+};
+
+/** ember's `/evaluate` answer putting the visitor in exp-1's var-A. */
+const ARM_A = {
+  experiment_id: 'exp-1',
+  variant_id: 'var-A',
+  variant_name: 'green',
+  is_control: false,
+  resolution: 'assigned',
 };
 
 function makeRequest(headers: Record<string, string> = {}): Request {
@@ -74,39 +83,22 @@ describe('resolveAssignments', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('cold-resolves when cookie is missing — fetches active + assigns', async () => {
-    const assignment: StoredAssignment = {
-      experimentId: 'exp-1',
-      variantId: 'var-A',
-      userId: 'will-be-overridden',
-      assignedAt: '2024-01-01T00:00:00Z',
-    };
-
-    vi.stubGlobal(
-      'fetch',
-      mockFetch([
-        // GET /experiments/active
-        () =>
-          new Response(JSON.stringify({ experiments: [exp1] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
-        // POST /experiments/exp-1/assign
-        () =>
-          new Response(
-            JSON.stringify({
-              assignment_id: 'a-1',
-              experiment_id: assignment.experimentId,
-              variant_id: assignment.variantId,
-              variant_name: 'green',
-              is_control: false,
-              assigned_at: assignment.assignedAt,
-              resolution: 'assigned',
-            }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          ),
-      ])
-    );
+  it('cold-resolves when cookie is missing: one /evaluate, never /assign', async () => {
+    const fetchMock = mockFetch([
+      // GET /experiments/active
+      () =>
+        new Response(JSON.stringify({ experiments: [exp1] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      // POST /evaluate
+      () =>
+        new Response(JSON.stringify({ evaluations: [ARM_A] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
 
     const result = await resolveAssignments({
       dsn: DSN,
@@ -115,10 +107,16 @@ describe('resolveAssignments', () => {
       userId: 'edge-user-1',
     });
 
-    expect(result.prehydrated).not.toBeNull();
+    // Evaluation writes no assignment: the page that delivers the arm records it.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe('https://api.example.com/0123456789abcdef0123456789abcdef/evaluate');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ user_id: 'edge-user-1' });
     expect(result.prehydrated?.user_id).toBe('edge-user-1');
     expect(result.prehydrated?.experiments).toEqual([exp1]);
     expect(result.prehydrated?.assignments['exp-1'].variantId).toBe('var-A');
+    expect(result.prehydrated?.assignments['exp-1'].userId).toBe('edge-user-1');
     expect(result.setCookie).toBeDefined();
     expect(result.setCookie).toMatch(new RegExp(`^${DEFAULT_COOKIE_NAME}=`));
   });
@@ -151,32 +149,29 @@ describe('resolveAssignments', () => {
     expect(result.setCookie).toBeUndefined();
   });
 
-  it('survives a single failing assign without losing the rest', async () => {
+  it.each([
+    ['fails', () => new Response('boom', { status: 500 })],
+    ['answers with no evaluations list', () => new Response('{}', { status: 200 })],
+  ])('falls through to client-side init when /evaluate %s', async (_case, evaluate) => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([
+        () => new Response(JSON.stringify({ experiments: [exp1] }), { status: 200 }),
+        evaluate,
+      ])
+    );
+    const result = await resolveAssignments({ dsn: DSN, request: makeRequest(), secret: SECRET });
+    expect(result.prehydrated).toBeNull();
+    expect(result.setCookie).toBeUndefined();
+  });
+
+  it('keeps the arms ember gave when it leaves an experiment out of its answer', async () => {
     const exp2: Experiment = { ...exp1, id: 'exp-2', name: 'Pricing' };
     vi.stubGlobal(
       'fetch',
       mockFetch([
-        () =>
-          new Response(JSON.stringify({ experiments: [exp1, exp2] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
-        // exp-1 succeeds
-        () =>
-          new Response(
-            JSON.stringify({
-              assignment_id: 'a-1',
-              experiment_id: 'exp-1',
-              variant_id: 'var-A',
-              variant_name: 'green',
-              is_control: false,
-              assigned_at: '2024-01-01T00:00:00Z',
-              resolution: 'assigned',
-            }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          ),
-        // exp-2 fails
-        () => new Response('boom', { status: 500 }),
+        () => new Response(JSON.stringify({ experiments: [exp1, exp2] }), { status: 200 }),
+        () => new Response(JSON.stringify({ evaluations: [ARM_A] }), { status: 200 }),
       ])
     );
 
@@ -192,27 +187,25 @@ describe('resolveAssignments', () => {
     expect(Object.keys(result.prehydrated?.assignments ?? {})).toEqual(['exp-1']);
   });
 
-  // ember answers 200 with null variant fields when the caller is in no
+  // ember answers with null variant fields when the caller is in no
   // variant. For these users the original *is* the answer.
   const NO_VARIANT = {
-    assignment_id: null,
     experiment_id: 'exp-1',
     variant_id: null,
     variant_name: null,
     is_control: null,
-    assigned_at: null,
   };
 
   it.each([
     ['held out', { ...NO_VARIANT, resolution: 'held_out' }],
     ['cap reached', { ...NO_VARIANT, resolution: 'cap_reached' }],
     ['workspace archived', { ...NO_VARIANT, resolution: 'workspace_archived' }],
-  ])('resolves %s to the original immediately, with no assignment', async (_arm, body) => {
+  ])('resolves %s to the original immediately, with no assignment', async (_arm, answer) => {
     vi.stubGlobal(
       'fetch',
       mockFetch([
         () => new Response(JSON.stringify({ experiments: [exp1] }), { status: 200 }),
-        () => new Response(JSON.stringify(body), { status: 200 }),
+        () => new Response(JSON.stringify({ evaluations: [answer] }), { status: 200 }),
       ])
     );
 
@@ -242,36 +235,28 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
   const T0 = 1_700_000_000;
   const RETRY_AFTER = 10 * 60;
 
-  const ASSIGNED = {
-    assignment_id: 'a-1',
-    experiment_id: 'exp-1',
-    variant_id: 'var-A',
-    variant_name: 'green',
-    is_control: false,
-    assigned_at: '2024-01-01T00:00:00Z',
-    resolution: 'assigned',
-  };
+  const ASSIGNED = ARM_A;
   const REFUSED = {
     ...ASSIGNED,
-    assignment_id: null,
     variant_id: null,
     variant_name: null,
     is_control: null,
-    assigned_at: null,
   };
   const CAPPED = { ...REFUSED, resolution: 'cap_reached' };
   const HELD_OUT = { ...REFUSED, resolution: 'held_out' };
 
   const json = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
+  /** An `/evaluate` response carrying these answers. */
+  const evaluated = (...answers: unknown[]) => json({ evaluations: answers });
 
   function cookieFrom(setCookie: string | undefined): string {
     expect(setCookie).toBeDefined();
     return setCookie!.split(';')[0];
   }
 
-  /** Cold-resolve one user whose assign answer is `assign`; return their cookie. */
-  async function coldResolve(assign: unknown): Promise<string> {
-    vi.stubGlobal('fetch', mockFetch([json({ experiments: [exp1] }), json(assign)]));
+  /** Cold-resolve one user whose `/evaluate` answers are `answers`; return their cookie. */
+  async function coldResolve(...answers: unknown[]): Promise<string> {
+    vi.stubGlobal('fetch', mockFetch([json({ experiments: [exp1] }), evaluated(...answers)]));
     const result = await resolveAssignments({
       dsn: DSN,
       request: makeRequest(),
@@ -307,32 +292,65 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
     expect(result.setCookie).toBeUndefined();
   });
 
-  it('asks again after the retry time and enrolls the same user', async () => {
+  it('evaluates the same user again after the retry time', async () => {
     const cookie = await coldResolve(CAPPED);
-    const fetchMock = mockFetch([json(ASSIGNED)]);
+    const fetchMock = mockFetch([evaluated(ASSIGNED)]);
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await resolveWith(cookie, T0 + RETRY_AFTER);
 
-    // Only the refused experiment is asked about, not the active list.
+    // One /evaluate, not the active list, and never /assign.
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toMatch(/\/experiments\/exp-1\/assign$/);
+    expect(String(url)).toMatch(/\/evaluate$/);
     expect(JSON.parse(String(init?.body))).toEqual({ user_id: 'edge-user-1' });
 
     expect(result.prehydrated?.user_id).toBe('edge-user-1');
     expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
 
-    // Enrolled now, so the new cookie has nothing left to retry.
+    // Has an arm now, so the new cookie has nothing left to retry.
     const later = vi.fn();
     vi.stubGlobal('fetch', later);
     await resolveWith(cookieFrom(result.setCookie), T0 + 10 * RETRY_AFTER);
     expect(later).not.toHaveBeenCalled();
   });
 
+  it('a retry changes only the experiments it was due for', async () => {
+    const exp2: Experiment = { ...exp1, id: 'exp-2', name: 'Pricing' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([
+        json({ experiments: [exp1, exp2] }),
+        evaluated(ASSIGNED, { ...CAPPED, experiment_id: 'exp-2' }),
+      ])
+    );
+    const cold = await resolveAssignments({
+      dsn: DSN,
+      request: makeRequest(),
+      secret: SECRET,
+      userId: 'edge-user-1',
+      now: T0,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([
+        evaluated(
+          { ...ASSIGNED, variant_id: 'var-B' },
+          { ...ASSIGNED, experiment_id: 'exp-2', variant_id: 'var-2' }
+        ),
+      ])
+    );
+    const result = await resolveWith(cookieFrom(cold.setCookie), T0 + RETRY_AFTER);
+
+    // The arm the visitor already has stays, so their page does not change.
+    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
+    expect(result.prehydrated?.assignments['exp-2']?.variantId).toBe('var-2');
+  });
+
   it('pushes the retry time back when still refused', async () => {
     const cookie = await coldResolve(CAPPED);
-    vi.stubGlobal('fetch', mockFetch([json(CAPPED)]));
+    vi.stubGlobal('fetch', mockFetch([evaluated(CAPPED)]));
     const retried = await resolveWith(cookie, T0 + RETRY_AFTER);
     expect(retried.prehydrated?.assignments).toEqual({});
 
@@ -365,7 +383,7 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
   it('asks again later when an older cuped API sends no resolution', async () => {
     const older = { ...ASSIGNED, resolution: undefined };
     const cookie = await coldResolve(older);
-    const fetchMock = mockFetch([json(ASSIGNED)]);
+    const fetchMock = mockFetch([evaluated(ASSIGNED)]);
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await resolveWith(cookie, T0 + RETRY_AFTER);
