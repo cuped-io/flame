@@ -1,5 +1,12 @@
 # @cuped-io/flame
 
+## 0.9.0
+
+### Minor Changes
+
+- aa165ae: flame-edge no longer counts visitors in experiments they never see. On a cookie miss it now asks cuped once for every experiment (`POST /evaluate`), which writes no assignment, instead of calling `/assign` per experiment. flame records each prehydrated variant with a `$assignment` event when it delivers it, control included, exactly as it does for variants it resolves itself. A prehydrated variant the anti-flicker timeout skipped is no longer counted or attached to events. A cookie retry after an event cap or archive also uses `/evaluate`. If that one call fails on a first visit, no cookie is set and the page resolves in the browser, as when the API is unreachable. Requires a cuped API that serves `/evaluate`.
+- 544ea5f: Experiments can target pages. When cuped sends an experiment's `url_pattern` (the goals' syntax: `/pricing`, `/product/*`, `/checkout/**`, `**/confirmation`), flame assigns, counts and changes a visitor only on a page whose path matches, so visitors who never saw the page no longer dilute the result. On other pages the experiment is skipped, though a visitor already counted keeps their variant on their events, so later conversions are attributed. Single-page apps are re-checked on `pushState`, `replaceState` and back/forward, and only when some experiment has a pattern: an experiment the new page matches is delivered there, and one it no longer matches has its change undone on whatever stays on screen. Each `$assignment` record now carries the `path` it was delivered on, which cuped checks against the pattern. Experiments without a pattern run on every page, as before. Arms resolved by `@cuped-io/flame-edge` are gated the same way. `@cuped-io/flame-react`'s `useExperiment` and `<Experiment>` do not check the pattern: a component renders its arm wherever it is placed. Promoted winners are not targeted yet, since cuped sends no pattern for them.
+
 ## 0.8.0
 
 ### Minor Changes
