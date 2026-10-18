@@ -416,8 +416,8 @@ export class TrackingManager {
    * as a reserved `$assignment` event. ember writes the visitor's assignment
    * from it; until then they are not counted. Its `path` is the page it was
    * delivered on, which ember checks against the experiment's `url_pattern`
-   * (flame#50). It carries no other page context and
-   * no `experiment_assignments`: it is not an event to attribute.
+   * (flame#50). It carries no other page context and no
+   * `experiment_assignments`: it is not an event to attribute.
    * `occurred_at` is now, which ember uses as `assigned_at`.
    *
    * Returns false when it drops a record ember would refuse. `onSent` runs

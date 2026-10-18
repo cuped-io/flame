@@ -46,7 +46,7 @@ function normalizePath(path: string): string {
 }
 
 /** Whether the experiment runs on the current page. No pattern: every page. */
-export function onThisPage(experiment: { url_pattern?: string | null }): boolean {
+export function runsOnThisPage(experiment: { url_pattern?: string | null }): boolean {
   if (!experiment.url_pattern) return true;
   if (typeof window === 'undefined') return false;
   return matchesUrlPattern(experiment.url_pattern, window.location.pathname);

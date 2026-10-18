@@ -235,9 +235,8 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
   const T0 = 1_700_000_000;
   const RETRY_AFTER = 10 * 60;
 
-  const ASSIGNED = ARM_A;
   const REFUSED = {
-    ...ASSIGNED,
+    ...ARM_A,
     variant_id: null,
     variant_name: null,
     is_control: null,
@@ -294,7 +293,7 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
 
   it('evaluates the same user again after the retry time', async () => {
     const cookie = await coldResolve(CAPPED);
-    const fetchMock = mockFetch([evaluated(ASSIGNED)]);
+    const fetchMock = mockFetch([evaluated(ARM_A)]);
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await resolveWith(cookie, T0 + RETRY_AFTER);
@@ -321,7 +320,7 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
       'fetch',
       mockFetch([
         json({ experiments: [exp1, exp2] }),
-        evaluated(ASSIGNED, { ...CAPPED, experiment_id: 'exp-2' }),
+        evaluated(ARM_A, { ...CAPPED, experiment_id: 'exp-2' }),
       ])
     );
     const cold = await resolveAssignments({
@@ -336,8 +335,8 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
       'fetch',
       mockFetch([
         evaluated(
-          { ...ASSIGNED, variant_id: 'var-B' },
-          { ...ASSIGNED, experiment_id: 'exp-2', variant_id: 'var-2' }
+          { ...ARM_A, variant_id: 'var-B' },
+          { ...ARM_A, experiment_id: 'exp-2', variant_id: 'var-2' }
         ),
       ])
     );
@@ -381,9 +380,9 @@ describe('resolveAssignments — retrying refusals that can lift', () => {
   });
 
   it('asks again later when an older cuped API sends no resolution', async () => {
-    const older = { ...ASSIGNED, resolution: undefined };
+    const older = { ...ARM_A, resolution: undefined };
     const cookie = await coldResolve(older);
-    const fetchMock = mockFetch([evaluated(ASSIGNED)]);
+    const fetchMock = mockFetch([evaluated(ARM_A)]);
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await resolveWith(cookie, T0 + RETRY_AFTER);

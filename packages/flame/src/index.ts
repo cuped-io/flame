@@ -30,7 +30,7 @@ import {
   targetsHydrated,
 } from './hydration';
 import { watchForFreshTargets } from './reapply';
-import { onThisPage } from './url-pattern';
+import { runsOnThisPage } from './url-pattern';
 import { watchPathChanges } from './navigation';
 import {
   initialConsentState,
@@ -81,8 +81,9 @@ class Flame {
   private identityMeta: IdentityMetadata | null = null;
   private domWatcher: { stop: () => void } | null = null;
   private navigationWatcher: { stop: () => void } | null = null;
-  // Experiments whose arm was applied on this page load (flame#50).
-  private applied = new Set<string>();
+  // Experiments whose change is on the current page (flame#50): applied once
+  // per page, undone when a client-side navigation leaves it.
+  private appliedOnThisPage = new Set<string>();
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
   private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
@@ -163,6 +164,7 @@ class Flame {
     clearStoredAssignments();
     this.arms.clear();
     this.assignments.clear();
+    this.appliedOnThisPage.clear();
     this.consentStatus = 'denied';
     storeConsent('denied');
     return this.consentStatus;
@@ -350,7 +352,7 @@ class Flame {
     // `variantId` is checked too: flame-edge cookies signed before it learned
     // to omit variant-less users carry `variantId: null`.
     if (assignment?.variantId) {
-      // Registered only once delivered (flame#46).
+      // Events carry it only once it is delivered (flame#46).
       this.arms.set(experiment.id, assignment);
       this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
     } else {
@@ -407,6 +409,8 @@ class Flame {
     // Except after consent, where applying on the visible page is the design.
     if (af?.revealed && !this.applyAfterReveal) {
       this.deliveryDecided();
+      // A later client-side navigation renders a new page, so it may deliver.
+      this.watchNavigation();
       return;
     }
 
@@ -452,7 +456,7 @@ class Flame {
       // Not this page's experiment (flame#50): the visitor is not assigned
       // here. One already counted on a matching page still carries the arm,
       // so a conversion here is attributed, but sees no change.
-      if (!onThisPage(experiment)) {
+      if (!runsOnThisPage(experiment)) {
         if (wasRecorded(experiment.id, userId, variant.id)) this.registerAssignment(assignment);
         continue;
       }
@@ -480,9 +484,9 @@ class Flame {
         if (!queued) continue;
       }
       this.registerAssignment(assignment);
-      // Once per page load: a target re-created later is the watcher's (#45).
-      if (this.applied.has(experiment.id)) continue;
-      this.applied.add(experiment.id);
+      // Once per page: a target re-created later is the watcher's (#45).
+      if (this.appliedOnThisPage.has(experiment.id)) continue;
+      this.appliedOnThisPage.add(experiment.id);
       this.applySafely(variant);
     }
   }
@@ -504,7 +508,39 @@ class Flame {
   private watchNavigation(): void {
     if (this.navigationWatcher || typeof window === 'undefined') return;
     if (!this.experiments.some((e) => e.url_pattern)) return;
-    this.navigationWatcher = watchPathChanges(() => this.deliverArms());
+    this.navigationWatcher = watchPathChanges(() => this.onPathChange());
+  }
+
+  /**
+   * The page changed without a load. An experiment that stops matching has
+   * its change undone, on whatever the app kept on screen; flame can only
+   * roll back everything, so the rest is applied again, without redirects,
+   * which have already happened. Then this page's arms are delivered.
+   */
+  private onPathChange(): void {
+    const leaving = this.experiments.filter(
+      (e) => this.appliedOnThisPage.has(e.id) && !runsOnThisPage(e)
+    );
+    if (leaving.length > 0) {
+      rollbackChanges();
+      for (const experiment of leaving) this.appliedOnThisPage.delete(experiment.id);
+      const reapply = (variant: Variant) =>
+        this.applySafely({
+          ...variant,
+          changes: variant.changes?.filter((c) => c.type !== 'redirect'),
+        });
+      for (const experiment of this.experiments) {
+        const arm =
+          this.appliedOnThisPage.has(experiment.id) && this.assignments.get(experiment.id);
+        const variant = arm && getAssignedVariant(experiment, arm);
+        if (variant) reapply(variant);
+      }
+      this.promotedWinners.forEach(reapply);
+    }
+    this.deliverArms();
+    // An app often routes first and renders after: the watcher catches the
+    // targets that appear once it does (flame#45).
+    this.watchForFreshTargets();
   }
 
   /**
@@ -537,7 +573,7 @@ class Flame {
     return [
       ...this.experiments.flatMap((experiment) => {
         const arm = arms.get(experiment.id);
-        const variant = arm && onThisPage(experiment) && getAssignedVariant(experiment, arm);
+        const variant = arm && runsOnThisPage(experiment) && getAssignedVariant(experiment, arm);
         return variant ? [variant] : [];
       }),
       ...this.promotedWinners,
@@ -735,7 +771,7 @@ class Flame {
     this.trackingManager?.stopAutoTracking();
     this.arms.clear();
     this.assignments.clear();
-    this.applied.clear();
+    this.appliedOnThisPage.clear();
     this.experiments = [];
     this.promotedWinners = [];
     this.initialized = false;

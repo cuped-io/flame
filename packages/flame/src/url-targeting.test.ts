@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
-import type { Experiment, ExperimentEvaluation, PrehydratedState } from './types';
+import type { Experiment, ExperimentEvaluation, FlameConfig, PrehydratedState } from './types';
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
 
@@ -59,7 +59,10 @@ const records = () => sent.filter((e) => e.event_type === '$assignment');
 const pageviews = () => sent.filter((e) => e.event_type === 'pageview');
 const headline = () => document.getElementById('headline')?.textContent;
 
-function stubApi(experiments: Experiment[]) {
+function stubApi(
+  experiments: Experiment[],
+  evaluate: () => ExperimentEvaluation | ExperimentEvaluation[] = () => TREATMENT
+) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -72,7 +75,9 @@ function stubApi(experiments: Experiment[]) {
         return new Response(JSON.stringify({ experiments }), { status: 200 });
       }
       if (url.endsWith('/evaluate')) {
-        return new Response(JSON.stringify({ evaluations: [TREATMENT] }), { status: 200 });
+        return new Response(JSON.stringify({ evaluations: [evaluate()].flat() }), {
+          status: 200,
+        });
       }
       return new Response('{}', { status: 200 });
     })
@@ -81,12 +86,17 @@ function stubApi(experiments: Experiment[]) {
 
 // Each Flame keeps watching the page after init (flame#45): reset them.
 const started: Flame[] = [];
-async function initOn(path: string, experiments: Experiment[]): Promise<Flame> {
+const resetStarted = () => started.splice(0).forEach((flame) => flame.reset());
+async function initOn(
+  path: string,
+  experiments: Experiment[],
+  config: Partial<FlameConfig> = {}
+): Promise<Flame> {
   history.replaceState(null, '', path);
   stubApi(experiments);
   const flame = new Flame();
   started.push(flame);
-  await flame.init({ dsn: DSN, enableBatching: false });
+  await flame.init({ dsn: DSN, enableBatching: false, ...config });
   await vi.waitFor(() => expect(pageviews().length).toBeGreaterThan(0));
   return flame;
 }
@@ -99,7 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  started.splice(0).forEach((flame) => flame.reset());
+  resetStarted();
   history.replaceState(null, '', '/');
 });
 
@@ -142,7 +152,7 @@ describe('a visitor already counted on a matching page', () => {
     await initOn('/pricing', [makeExperiment('/pricing')]);
     expect(records()).toHaveLength(1);
 
-    started.splice(0).forEach((f) => f.reset());
+    resetStarted();
     sent = [];
     document.body.innerHTML = '<h1 id="headline">original</h1>';
     const flame = await initOn('/checkout', [makeExperiment('/pricing')]);
@@ -218,16 +228,7 @@ describe('an arm flame-edge resolved', () => {
   });
 
   it('is gated by the page like any other', async () => {
-    history.replaceState(null, '', '/about');
-    stubApi([]);
-    const flame = new Flame();
-    started.push(flame);
-    await flame.init({
-      dsn: DSN,
-      enableBatching: false,
-      prehydrated: prehydrated(makeExperiment('/pricing')),
-    });
-    await vi.waitFor(() => expect(pageviews()).toHaveLength(1));
+    await initOn('/about', [], { prehydrated: prehydrated(makeExperiment('/pricing')) });
     expect(records()).toHaveLength(0);
     expect(headline()).toBe('original');
 
@@ -235,5 +236,94 @@ describe('an arm flame-edge resolved', () => {
     await vi.waitFor(() => expect(records()).toHaveLength(1));
     expect(records()[0].user_id).toBe('edge-user');
     expect(headline()).toBe('variant');
+  });
+});
+
+describe('withdrawing consent, then accepting again on the same page', () => {
+  it("applies the new visitor's arm, not only records it", async () => {
+    const experiment = makeExperiment('/pricing');
+    experiment.variants!.push({
+      ...experiment.variants![0],
+      id: 'exp-1-b',
+      name: 'B',
+      changes: [{ type: 'text', selector: '#headline', value: 'variant B' }],
+    });
+    const answers = [TREATMENT, { ...TREATMENT, variant_id: 'exp-1-b', variant_name: 'B' }];
+    history.replaceState(null, '', '/pricing');
+    stubApi([experiment], () => answers.shift()!);
+    const flame = new Flame();
+    started.push(flame);
+    await flame.init({ dsn: DSN, enableBatching: false, requireConsent: true });
+
+    flame.consent(true);
+    await vi.waitFor(() => expect(headline()).toBe('variant'));
+    flame.consent(false);
+    flame.consent(true);
+
+    await vi.waitFor(() =>
+      expect(records().map((r) => r.metadata?.variant_id)).toContain('exp-1-b')
+    );
+    expect(flame.getVariant('exp-1')).toBe('exp-1-b');
+    expect(headline()).toBe('variant B');
+  });
+});
+
+describe('navigating off the matching pages', () => {
+  it('undoes the change on what stays on screen, and keeps experiments that still run', async () => {
+    const everywhere: Experiment = {
+      ...makeExperiment(null),
+      id: 'exp-2',
+      variants: [
+        {
+          ...makeExperiment(null).variants![0],
+          id: 'exp-2-treatment',
+          experiment_id: 'exp-2',
+          changes: [{ type: 'text', selector: '#footer', value: 'footer variant' }],
+        },
+      ],
+    };
+    document.body.innerHTML = '<h1 id="headline">original</h1><p id="footer">footer</p>';
+    history.replaceState(null, '', '/pricing');
+    stubApi([makeExperiment('/pricing'), everywhere], () => [
+      TREATMENT,
+      { ...TREATMENT, experiment_id: 'exp-2', variant_id: 'exp-2-treatment' },
+    ]);
+    const flame = new Flame();
+    started.push(flame);
+    await flame.init({ dsn: DSN, enableBatching: false });
+    expect(headline()).toBe('variant');
+
+    // The headline is in a layout the app keeps across routes.
+    history.pushState(null, '', '/about');
+    expect(headline()).toBe('original');
+    expect(document.getElementById('footer')?.textContent).toBe('footer variant');
+
+    // Back on a matching page, the change returns, with no second record.
+    history.pushState(null, '', '/pricing');
+    expect(headline()).toBe('variant');
+    expect(records().filter((r) => r.metadata?.experiment_id === 'exp-1')).toHaveLength(1);
+  });
+});
+
+describe('after the anti-flicker timeout revealed the original', () => {
+  afterEach(() => {
+    delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
+  });
+
+  it('still delivers on a later client-side navigation, once the app renders the target', async () => {
+    (window as unknown as { __cupedAntiflicker: unknown }).__cupedAntiflicker = {
+      revealed: true,
+      reveal: () => {},
+    };
+    await initOn('/about', [makeExperiment('/pricing')]);
+    expect(records()).toHaveLength(0);
+
+    // The app routes first and renders the new page after.
+    document.body.innerHTML = '';
+    history.pushState(null, '', '/pricing');
+    document.body.innerHTML = '<h1 id="headline">original</h1>';
+
+    await vi.waitFor(() => expect(headline()).toBe('variant'));
+    expect(records()).toHaveLength(1);
   });
 });

@@ -133,7 +133,7 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
       const outcomes = await evaluateArms({ ...fetchOpts, userId: state.user_id }).catch(
         () => new Map<string, ArmOutcome>()
       );
-      const resolved = sortOutcomes(pending, outcomes);
+      const resolved = partitionOutcomes(pending, outcomes);
       const next: PrehydratedState = {
         ...state,
         assignments: { ...state.assignments, ...resolved.assignments },
@@ -146,7 +146,7 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
     const userIdCreatedAt = new Date(now * 1000).toISOString();
 
     const experiments = await fetchActiveExperiments(fetchOpts);
-    const resolved = sortOutcomes(
+    const resolved = partitionOutcomes(
       experiments.map((e) => e.id),
       experiments.length ? await evaluateArms({ ...fetchOpts, userId }) : new Map()
     );
@@ -167,12 +167,12 @@ export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveR
 }
 
 /**
- * Sort each experiment's `/evaluate` outcome into the cookie. Held-out
- * experiments are left out of `assignments` for good; declined ones, and
- * any ember left out of its answer, are left out too but listed in
- * `retry`, to ask about again later.
+ * Split each experiment's `/evaluate` outcome into the cookie's arms and
+ * retries. Held-out experiments are left out of `assignments` for good;
+ * declined ones, and any ember left out of its answer, are left out too but
+ * listed in `retry`, to ask about again later.
  */
-function sortOutcomes(
+function partitionOutcomes(
   experimentIds: string[],
   outcomes: Map<string, ArmOutcome>
 ): { assignments: Record<string, StoredAssignment>; retry: string[] } {

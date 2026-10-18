@@ -36,13 +36,13 @@ function wrapHistory(): void {
 }
 
 /** Calls `onChange` when the path changes without a page load. */
-export function watchPathChanges(onChange: (path: string) => void): { stop: () => void } {
+export function watchPathChanges(onChange: () => void): { stop: () => void } {
   let last = window.location.pathname;
   const listener = () => {
     const path = window.location.pathname;
     if (path === last) return;
     last = path;
-    onChange(path);
+    onChange();
   };
   wrapHistory();
   listeners.add(listener);
