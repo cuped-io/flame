@@ -93,18 +93,52 @@ export class OfflineStorage {
       }));
 
       // Load existing events (already filters expired)
-      const existingStored = this.loadStored();
-
-      // Combine existing and new
-      const combined = [...existingStored, ...newStored];
-
-      // Enforce max limit - keep newest events (FIFO eviction of oldest)
-      const toKeep = combined.slice(-this.maxEvents);
-
-      localStorage.setItem(this.storageKey, JSON.stringify(toKeep));
+      this.write([...this.loadStored(), ...newStored]);
     } catch {
       // Silently fail - localStorage might be full or unavailable
     }
+  }
+
+  /**
+   * The oldest stored events, at most `limit`, left in place
+   *
+   * For a send that may take a while: they stay stored until
+   * {@link remove}, so a page that closes mid-send loses none of them.
+   */
+  peek(limit: number): StoredEvent[] {
+    return this.loadStored().slice(0, limit);
+  }
+
+  /**
+   * Remove events from {@link peek} once they need no further send
+   *
+   * Events saved since are kept.
+   */
+  remove(sent: StoredEvent[]): void {
+    if (!this.isAvailable() || sent.length === 0) {
+      return;
+    }
+
+    try {
+      const toRemove = sent.map((item) => JSON.stringify(item));
+      this.write(
+        this.loadStored().filter((item) => {
+          const i = toRemove.indexOf(JSON.stringify(item));
+          if (i === -1) return true;
+          toRemove.splice(i, 1);
+          return false;
+        })
+      );
+    } catch {
+      // Silently fail - localStorage might be full or unavailable
+    }
+  }
+
+  /**
+   * Store events, oldest first, keeping the newest maxEvents (FIFO eviction)
+   */
+  private write(stored: StoredEvent[]): void {
+    localStorage.setItem(this.storageKey, JSON.stringify(stored.slice(-this.maxEvents)));
   }
 
   /**

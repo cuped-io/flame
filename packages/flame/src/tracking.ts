@@ -23,7 +23,7 @@ export interface TrackingManagerConfig {
   debug?: boolean;
   /** Enable event batching (default: true) */
   enableBatching?: boolean;
-  /** Number of events to queue before flushing (default: 10) */
+  /** Number of events to queue before flushing (default: 50) */
   batchSize?: number;
   /** Interval in milliseconds to flush queued events (default: 5000) */
   flushIntervalMs?: number;
@@ -40,9 +40,12 @@ export interface TrackingManagerConfig {
 /**
  * Tracking manager for event tracking
  *
- * Uses sendBeacon for reliable event delivery, ensuring events are sent
- * even when the page is navigating away (e.g., checkout clicks that redirect
- * to external checkout pages).
+ * Delivery is best effort (flame#40). While the page is open, batches go by
+ * keepalive fetch, so a batch ember may take later is retried. When the page
+ * may be leaving (unload, `flush()`, batching disabled), events go by
+ * sendBeacon, which is sent even as the page navigates away (e.g., checkout
+ * clicks that redirect to external checkout pages) but never sees ember's
+ * answer.
  *
  * All tracking uses the single-event model:
  * - Single event per user action (not per experiment)
@@ -421,8 +424,9 @@ export class TrackingManager {
    * `occurred_at` is now, which ember uses as `assigned_at`.
    *
    * Returns false when it drops a record ember would refuse. `onSent` runs
-   * once the browser accepts the batch carrying the record; a batch kept for
-   * retry does not count, so the arm is recorded again on the next page load.
+   * once the batch carrying the record is sent: ember accepted it, or, sent
+   * by beacon, the browser queued it. A batch kept for retry or refused by
+   * ember does not count, so the arm is recorded again on the next page load.
    */
   recordAssignment(
     experimentId: string,

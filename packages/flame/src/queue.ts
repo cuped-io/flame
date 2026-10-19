@@ -6,8 +6,8 @@ import { OfflineStorage, DEFAULT_MAX_OFFLINE_EVENTS, DEFAULT_OFFLINE_TTL_MS } fr
  * Default batch size (number of events before auto-flush). 50
  * matches the Mixpanel / Statsig industry-typical default — large
  * enough to amortize per-request server cost ~5× over the previous
- * value of 10, small enough to fit comfortably under sendBeacon's
- * ~64 KB browser limit at typical event sizes
+ * value of 10, small enough to fit comfortably under the ~64 KB browser
+ * limit on a beacon or keepalive fetch at typical event sizes
  * (~200-700 bytes/event → 10-35 KB at batch=50).
  */
 export const DEFAULT_BATCH_SIZE = 50;
@@ -50,20 +50,27 @@ export interface EventQueueConfig {
 /**
  * Event queue that batches events and flushes them periodically
  *
- * Events are queued and flushed:
- * - When batch size threshold is reached
- * - When flush interval timer fires
- * - When page is unloading (guaranteed delivery via sendBeacon)
+ * Delivery is best effort (flame#40). Events are sent:
+ * - When batch size threshold is reached, or the flush interval timer
+ *   fires: by keepalive fetch, which sees ember's answer
+ * - When the page is unloading, or on flush(): by sendBeacon, which
+ *   does not
  *
  * Offline resilience:
- * - Failed events are persisted to localStorage
- * - Automatic retry with exponential backoff
- * - Flushes persisted events when coming back online
+ * - A batch that may succeed later (network error, 5xx, 408, 429, or a
+ *   beacon the browser will not queue) is persisted to localStorage and
+ *   retried by fetch with exponential backoff, on coming back online, and
+ *   on the next page load, until its TTL expires
+ * - A batch ember refuses (any other 4xx, e.g. 402 quota_exceeded or
+ *   403 origin_not_allowed) is dropped; debug mode logs why
+ * - A batch the browser queued as a beacon counts as sent, whatever
+ *   ember answers
  */
 export class EventQueue {
   private apiClient: ApiClient;
   private queue: CreateEventRequest[] = [];
-  // Told once the browser accepts the batch carrying their event (flame#46).
+  // Told once the batch carrying their event is sent (flame#46): ember
+  // accepted it, or, for a beacon, the browser queued it.
   private onSent = new Map<CreateEventRequest, () => void>();
   private batchSize: number;
   private flushIntervalMs: number;
@@ -73,6 +80,10 @@ export class EventQueue {
   private offlineStorage: OfflineStorage | null = null;
   private retryAttempt = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private drainingOfflineStorage = false;
+  // Bumped by stop(): an answer to a send from before it is ignored, so
+  // consent withdrawal (flame#18) is not undone by a fetch still in flight.
+  private run = 0;
   private onlineHandler: (() => void) | null = null;
 
   constructor(apiClient: ApiClient, config: EventQueueConfig = {}) {
@@ -108,7 +119,7 @@ export class EventQueue {
     // Start flush timer
     if (this.flushTimer === null) {
       this.flushTimer = setInterval(() => {
-        this.flush();
+        this.send();
       }, this.flushIntervalMs);
       this.log('Started flush timer', { intervalMs: this.flushIntervalMs });
     }
@@ -146,6 +157,7 @@ export class EventQueue {
    * Stop the queue (timer and unload handler)
    */
   stop(): void {
+    this.run++;
     if (this.flushTimer !== null) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
@@ -184,21 +196,22 @@ export class EventQueue {
 
     // Check if we should flush
     if (this.queue.length >= this.batchSize) {
-      this.log('Batch size reached, flushing');
-      this.flush();
+      this.log('Batch size reached, sending');
+      this.send();
     }
   }
 
   /**
-   * Flush all queued events
+   * Flush all queued events with sendBeacon, for when the page may be leaving
    *
-   * Uses sendBeacon for reliable delivery, especially during page unload.
-   * If sendBeacon fails, events are persisted to offline storage.
+   * A beacon outlives the page, but nothing sees ember's answer: a batch
+   * the browser queues counts as sent, even if ember refuses it or fails
+   * (flame#40). Only a batch the browser will not queue is kept for retry.
+   * Kept events are left for {@link send} or the next page load, where a
+   * failure can be seen.
    */
   flush(): void {
     if (this.queue.length === 0) {
-      // Also try to flush any persisted events
-      this.flushOfflineStorage();
       return;
     }
 
@@ -220,6 +233,40 @@ export class EventQueue {
     }
     // A persisted event's sender is not told: it sends again next page load.
     for (const event of events) this.onSent.delete(event);
+  }
+
+  /**
+   * Send all queued events while the page is open (flame#40)
+   *
+   * A keepalive fetch, so ember's answer is seen.
+   */
+  private async send(): Promise<void> {
+    if (this.queue.length === 0) {
+      // Kept events wait out a backoff already under way.
+      if (this.retryTimer === null) {
+        this.flushOfflineStorage();
+      }
+      return;
+    }
+
+    const events = this.queue;
+    this.queue = [];
+    const callbacks = events.map((event) => this.onSent.get(event));
+    for (const event of events) this.onSent.delete(event);
+
+    this.log('Sending events', { count: events.length });
+    const run = this.run;
+    const delivery = await this.apiClient.sendEvents(events);
+    if (run !== this.run) {
+      return;
+    }
+    if (delivery === 'sent') {
+      for (const callback of callbacks) callback?.();
+    } else if (delivery === 'retry') {
+      // Kept for retry; its sender is not told (see flush()).
+      this.offlineStorage?.save(events);
+      this.scheduleRetry();
+    }
   }
 
   /**
@@ -245,10 +292,17 @@ export class EventQueue {
   }
 
   /**
-   * Flush events from offline storage
+   * Send kept events by fetch, oldest first, one batch at a time (flame#40)
+   *
+   * A batch stays stored until ember answers: a page that closes mid-send
+   * sends it again on the next load rather than losing it. One batch at a
+   * time, because a keepalive fetch, like a beacon, is refused above
+   * ~64 KB. A refused batch is removed like a sent one: it can never
+   * succeed.
    */
-  private flushOfflineStorage(): void {
-    if (!this.offlineStorage) {
+  private async flushOfflineStorage(): Promise<void> {
+    const storage = this.offlineStorage;
+    if (!storage || this.drainingOfflineStorage) {
       return;
     }
 
@@ -258,22 +312,28 @@ export class EventQueue {
       return;
     }
 
-    const stored = this.offlineStorage.load();
+    const stored = storage.peek(this.batchSize);
     if (stored.length === 0) {
       this.retryAttempt = 0;
       return;
     }
 
     this.log('Flushing offline storage', { count: stored.length });
-    const success = this.apiClient.trackEventsBeacon(stored);
+    this.drainingOfflineStorage = true;
+    const run = this.run;
+    const delivery = await this.apiClient.sendEvents(stored.map((item) => item.event));
+    this.drainingOfflineStorage = false;
+    if (run !== this.run) {
+      return;
+    }
 
-    if (success) {
-      this.offlineStorage.clear();
-      this.retryAttempt = 0;
-      this.log('Offline storage flushed successfully');
-    } else {
+    if (delivery === 'retry') {
       this.log('Offline storage flush failed, scheduling retry');
       this.scheduleRetry();
+    } else {
+      storage.remove(stored);
+      this.retryAttempt = 0;
+      this.log('Offline storage flushed', { delivery });
     }
   }
 

@@ -344,4 +344,70 @@ describe('ApiClient', () => {
       expect(result).toBe(false);
     });
   });
+
+  // flame#40: a beacon never sees ember's answer; a keepalive fetch does.
+  describe('sendEvents', () => {
+    const events = [{ user_id: 'user-123', event_type: 'pageview' }];
+
+    it('POSTs the envelope as a keepalive text/plain request and reports a 2xx as sent', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 204, text: () => Promise.resolve('') });
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+      await expect(client.sendEvents(events)).resolves.toBe('sent');
+
+      expect(fetchMock).toHaveBeenCalledWith('https://api.cuped.io/pk_live_abc123/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ events }),
+        keepalive: true,
+      });
+    });
+
+    it.each([500, 503, 408, 429])('reports a %i as worth retrying', async (status) => {
+      fetchMock.mockResolvedValueOnce({ ok: false, status, text: () => Promise.resolve('') });
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+      await expect(client.sendEvents(events)).resolves.toBe('retry');
+    });
+
+    it('reports a network error as worth retrying', async () => {
+      fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+      await expect(client.sendEvents(events)).resolves.toBe('retry');
+    });
+
+    it.each([
+      [400, '{"error":"invalid event"}'],
+      [401, '{"error":"invalid api key"}'],
+      [402, '{"error":"quota_exceeded","code":"quota_exceeded"}'],
+      [403, '{"error":"origin_not_allowed","code":"origin_not_allowed"}'],
+    ])('reports a %i as refused, and says why in debug mode', async (status, body) => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      fetchMock.mockResolvedValueOnce({ ok: false, status, text: () => Promise.resolve(body) });
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io', true);
+
+      await expect(client.sendEvents(events)).resolves.toBe('refused');
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[Flame]',
+        `ember refused 1 event (${status}), dropping:`,
+        body
+      );
+    });
+
+    it('says nothing about a refusal outside debug mode', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 402,
+        text: () => Promise.resolve('{"error":"quota_exceeded"}'),
+      });
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+      await expect(client.sendEvents(events)).resolves.toBe('refused');
+
+      expect(consoleSpy).not.toHaveBeenCalled();
+    });
+  });
 });

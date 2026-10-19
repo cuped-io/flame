@@ -11,6 +11,20 @@ import type {
 import type { UserContext } from './context';
 
 /**
+ * What became of a batch sent with {@link ApiClient.sendEvents}.
+ *
+ * - `sent`: ember accepted it.
+ * - `retry`: it may succeed later (network error, 5xx, 408, 429).
+ * - `refused`: it never will (any other 4xx: 400, 401, 402, 403, ...).
+ */
+export type EventDelivery = 'sent' | 'retry' | 'refused';
+
+/** Whether an answer from ember is worth sending the same batch again. */
+function isRetryable(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429;
+}
+
+/**
  * API client for communicating with the cuped API
  *
  * Uses DSN mode where the API key is included in the URL path (/{api_key}/endpoint)
@@ -135,18 +149,59 @@ export class ApiClient {
   }
 
   /**
+   * Send events and report what ember answered (flame#40)
+   *
+   * POST /{api_key}/events with the same `{ events: [...] }` envelope as
+   * the beacon. A keepalive fetch outlives the page like a beacon does,
+   * but it also sees the response.
+   */
+  async sendEvents(events: CreateEventRequest[]): Promise<EventDelivery> {
+    const payload: CreateEventBatchRequest = { events };
+    const url = `${this.apiUrl}${this.buildPath('/events')}`;
+    this.log('fetch events', url, { count: events.length });
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        // text/plain, as for the beacon: no CORS preflight.
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+    } catch (error) {
+      this.log('Events not delivered, will retry:', error);
+      return 'retry';
+    }
+
+    if (response.ok) {
+      return 'sent';
+    }
+    if (isRetryable(response.status)) {
+      this.log(`Events not delivered (${response.status}), will retry`);
+      return 'retry';
+    }
+    if (this.debug) {
+      const body = await response.text().catch(() => '');
+      const noun = events.length === 1 ? 'event' : 'events';
+      this.log(`ember refused ${events.length} ${noun} (${response.status}), dropping:`, body);
+    }
+    return 'refused';
+  }
+
+  /**
    * Track events using sendBeacon (fire-and-forget)
    *
    * POST /{api_key}/events with the array envelope `{ events: [...] }`.
    * A lone event is sent as an array of one — there is no separate
    * single-event endpoint.
    *
-   * sendBeacon is used for reliable delivery on page navigation: the
-   * browser guarantees the request is sent even if the page unloads
-   * (e.g. checkout clicks that redirect to an external page).
+   * For when the page may be leaving: the browser sends a beacon even if
+   * the page unloads (e.g. checkout clicks that redirect to an external
+   * page). While the page is open, use {@link sendEvents}.
    *
-   * Note: sendBeacon does not return a response, so we can't confirm
-   * the events were recorded. The server returns 204 No Content.
+   * Note: sendBeacon never sees the response, so a 4xx or 5xx from ember
+   * is lost unseen (flame#40). `true` means queued, not delivered.
    *
    * @param events - Events to send (at least one)
    * @returns true if the beacon was queued successfully, false otherwise

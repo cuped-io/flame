@@ -17,7 +17,7 @@ export interface FlameConfig {
   debug?: boolean;
   /** Enable event batching (default: true) */
   enableBatching?: boolean;
-  /** Number of events to queue before flushing (default: 10) */
+  /** Number of events to queue before flushing (default: 50) */
   batchSize?: number;
   /** Interval in milliseconds to flush queued events (default: 5000) */
   flushIntervalMs?: number;
