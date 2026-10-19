@@ -1,5 +1,12 @@
 # @cuped-io/flame-react
 
+## 0.4.4
+
+### Patch Changes
+
+- Updated dependencies [d428e9e]
+  - @cuped-io/flame@0.9.1
+
 ## 0.4.3
 
 ### Patch Changes
