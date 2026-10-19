@@ -1,5 +1,11 @@
 # @cuped-io/flame
 
+## 0.9.1
+
+### Patch Changes
+
+- d428e9e: Batched events sent while the page is open now go by keepalive `fetch` instead of `sendBeacon`, so flame sees cuped's answer. A batch that may succeed later (a network error, 5xx, 408 or 429) is kept and retried with backoff, as a batch the browser would not queue already was. A batch cuped refuses (any other 4xx, such as 402 `quota_exceeded` or 403 `origin_not_allowed`) is dropped, and debug mode logs the status and reason. On this path an arm counts as recorded only once cuped accepts its `$assignment`, so a refused record is sent again on the next page load. On unload, on `flush()`, and with batching disabled, events still go by `sendBeacon`, which never sees the answer: delivery stays best effort, and a beacon the browser queues counts as sent. Kept events stay stored until cuped answers, so a page that closes mid-send sends them again on the next load rather than losing them. They are sent one batch at a time, are no longer re-sent on unload, keep their first timestamp so the offline TTL still expires them, and are not sent again once consent is withdrawn, even if an answer arrives afterwards. Requires the cuped ingest host to send CORS headers on `/events` responses, as it does today.
+
 ## 0.9.0
 
 ### Minor Changes
