@@ -253,13 +253,20 @@ export class TrackingManager {
     const target = event.target as Element;
     if (!target) return;
 
-    this.checkGoalMatch(target, 'submit');
+    // Most built-in submit selectors name the button inside the form
+    // (`.newsletter-form button[type="submit"]`), which is never the form or
+    // one of its ancestors, so also test the button that submitted it (#54).
+    this.checkGoalMatch(target, 'submit', event.submitter ?? undefined);
   }
 
   /**
    * Check if an element matches any registered goals and fire events
    */
-  private checkGoalMatch(element: Element, eventType: 'click' | 'submit'): void {
+  private checkGoalMatch(
+    element: Element,
+    eventType: 'click' | 'submit',
+    submitter?: Element
+  ): void {
     if (this.debug) {
       console.log(`[Flame] Checking ${this.registeredGoals.length} goals for ${eventType} event`);
     }
@@ -278,7 +285,9 @@ export class TrackingManager {
       // so it's only trackable manually via flame.track(); skip it.
       let matches: boolean;
       if (goal.selector) {
-        matches = this.elementMatchesGoal(element, goal.selector);
+        matches =
+          this.elementMatchesGoal(element, goal.selector) ||
+          (submitter !== undefined && this.elementMatchesGoal(submitter, goal.selector));
       } else {
         matches = eventType === 'submit';
       }

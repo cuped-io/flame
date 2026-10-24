@@ -371,7 +371,13 @@ test('keeps the original for a visitor held out of a promoted winner', async ({ 
       json: {
         evaluations: body.evaluations.map((e) =>
           e.experiment_id === PROMOTED_CONTRACT.id
-            ? { ...e, variant_id: null, variant_name: null, is_control: null, resolution: 'held_out' }
+            ? {
+                ...e,
+                variant_id: null,
+                variant_name: null,
+                is_control: null,
+                resolution: 'held_out',
+              }
             : e
         ),
       },
@@ -414,4 +420,23 @@ test('sends no events for a promoted experiment', async ({ page, request }) => {
     .map((e) => (e.metadata as { experiment_id: string }).experiment_id);
   expect(recordedIds).toContain('exp_react');
   expect(recordedIds).not.toContain(PROMOTED_CONTRACT.id);
+});
+
+// flame#54: most built-in submit selectors name the button inside the form, so
+// they only match through the submit event's submitter. A real submit in a real
+// browser, read from what the API actually received.
+test('detects newsletter and search submits by their button (flame#54)', async ({
+  page,
+  request,
+}) => {
+  await page.goto('http://localhost:8789/e2e/fixtures/pages/ecommerce-submit.html');
+  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+  await page.locator('#newsletter-submit').click();
+  await page.locator('#search-submit').click();
+  await flushBeacons(page);
+
+  await expect
+    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+    .toEqual(expect.arrayContaining(['newsletter_signup', 'search']));
 });

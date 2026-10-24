@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    flame#54: built-in submit goals whose selectors name the button inside the
+    form. The forms cancel their own navigation so the test page stays put.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <title>flame e2e: e-commerce submit detection</title>
+  </head>
+  <body>
+    <h1 id="target-text">Original text content.</h1>
+    <form class="newsletter-form" action="/newsletter" onsubmit="event.preventDefault()">
+      <input name="email" value="shopper@example.com" />
+      <button type="submit" id="newsletter-submit">Join</button>
+    </form>
+    <form role="search" action="/search" onsubmit="event.preventDefault()">
+      <input name="q" value="shoes" />
+      <button type="submit" id="search-submit">Search</button>
+    </form>
+    <script
+      src="../../../packages/flame/dist/flame.js"
+      data-dsn="https://YOUR_KEY@localhost:8080"
+      data-ecommerce="true"
+    ></script>
+  </body>
+</html>

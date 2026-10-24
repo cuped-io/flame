@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { TrackingManager } from './tracking';
+import { getEcommerceGoals } from './ecommerce';
 import type { StoredAssignment } from './types';
 import type { ApiClient } from './api';
 
@@ -333,6 +334,66 @@ describe('TrackingManager', () => {
           experiment_assignments: [{ experiment_id: 'exp-1', variant_id: 'variant-1' }],
         }),
       ]);
+    });
+
+    // flame#54: most built-in submit selectors name the button inside the form
+    // (`.newsletter-form button[type="submit"]`). The submit event's target is
+    // the form, so those parts only match through `event.submitter`. Real
+    // submits (button.click()), against the real built-in goal list.
+    it.each([
+      [
+        '<form class="newsletter-form"><button type="submit">Join</button></form>',
+        'newsletter_signup',
+      ],
+      [
+        '<form action="/newsletter"><button type="submit">Join</button></form>',
+        'newsletter_signup',
+      ],
+      [
+        '<form data-action="newsletter"><button type="submit">Join</button></form>',
+        'newsletter_signup',
+      ],
+      ['<form role="search"><button type="submit">Go</button></form>', 'search'],
+      ['<form action="/search"><button type="submit">Go</button></form>', 'search'],
+    ])('fires the built-in submit goal for %s', (html, goalName) => {
+      document.body.innerHTML = html;
+      document.querySelector('form')!.addEventListener('submit', (e) => e.preventDefault());
+
+      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
+      manager.registerAssignment({
+        experimentId: 'exp-1',
+        variantId: 'variant-1',
+        userId: 'user-123',
+        assignedAt: '2024-01-01T00:00:00Z',
+      });
+      manager.registerGoals('exp-1', getEcommerceGoals());
+      manager.startAutoTracking();
+
+      (document.querySelector('button') as HTMLButtonElement).click();
+
+      expect(mockApiClient.trackEventsBeacon).toHaveBeenCalledWith([
+        expect.objectContaining({ event_type: goalName }),
+      ]);
+    });
+
+    it('does not fire a built-in submit goal for an unrelated form', () => {
+      document.body.innerHTML =
+        '<form action="/contact"><button type="submit">Send</button></form>';
+      document.querySelector('form')!.addEventListener('submit', (e) => e.preventDefault());
+
+      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
+      manager.registerAssignment({
+        experimentId: 'exp-1',
+        variantId: 'variant-1',
+        userId: 'user-123',
+        assignedAt: '2024-01-01T00:00:00Z',
+      });
+      manager.registerGoals('exp-1', getEcommerceGoals());
+      manager.startAutoTracking();
+
+      (document.querySelector('button') as HTMLButtonElement).click();
+
+      expect(mockApiClient.trackEventsBeacon).not.toHaveBeenCalled();
     });
 
     it('should NOT fire a click goal with no selector (clicks need an explicit target)', () => {
