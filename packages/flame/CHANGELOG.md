@@ -1,5 +1,11 @@
 # @cuped-io/flame
 
+## 0.9.2
+
+### Patch Changes
+
+- 3ba5c30: E-commerce detection now records newsletter signups and searches. Their built-in selectors name the submit button inside the form, and flame only tested the form itself, so with `data-ecommerce="true"` those two goals almost never fired. A form submit is now matched against the button that submitted it as well.
+
 ## 0.9.1
 
 ### Patch Changes

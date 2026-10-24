@@ -1,5 +1,12 @@
 # @cuped-io/flame-edge
 
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [3ba5c30]
+  - @cuped-io/flame@0.9.2
+
 ## 0.5.1
 
 ### Patch Changes
