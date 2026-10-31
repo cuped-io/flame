@@ -2,8 +2,9 @@
  * Mock cuped API for the flame e2e suite.
  *
  * Implements the handful of endpoints the SDK + edge middleware hit:
- *   GET  /:key/experiments/active
- *   POST /:key/evaluate              (flame#46: every arm, no enrolment)
+ *   GET  /:key/rules                 (flame#24: the rules file flame picks from)
+ *   GET  /:key/experiments/active    (flame-edge)
+ *   POST /:key/evaluate              (flame-edge: every arm, no enrolment)
  *   POST /:key/experiments/:id/assign (older flame and flame-edge builds)
  *   POST /:key/identity/link
  *   POST /:key/events
@@ -24,6 +25,7 @@ import {
   EXPERIMENTS,
   PORTS,
   PROMOTED_CONTRACT,
+  RULES,
   TEST_API_KEY,
   treatmentVariantFor,
 } from '../fixtures/experiments.mjs';
@@ -89,6 +91,12 @@ const server = createServer(async (req, res) => {
   const [, key, rest] = keyed;
   if (key !== TEST_API_KEY) {
     send(res, 401, { error: 'bad api key' });
+    return;
+  }
+
+  // GET /:key/rules (ember#309)
+  if (rest === '/rules' && method === 'GET') {
+    send(res, 200, RULES);
     return;
   }
 

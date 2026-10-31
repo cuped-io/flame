@@ -2,79 +2,239 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { resetEvents, getRecordedEvents, flushBeacons } from './helpers';
 // @ts-expect-error -- untyped .mjs fixture module
-import { PROMOTED_CONTRACT } from '../fixtures/experiments.mjs';
+import {
+  PORTS,
+  PROMOTED_CONTRACT,
+  RULES,
+  SCRIPT_TAG_EXPERIMENT,
+} from '../fixtures/experiments.mjs';
 
 const PAGE = 'http://localhost:8789/examples/script-tag/index.html';
+const SLUG: string = SCRIPT_TAG_EXPERIMENT.slug;
+const ARM = { experiment_id: 'exp_script_tag', variant_id: 'var_script_treatment' };
+
+type FlameWindow = {
+  flame: {
+    ready: Promise<void>;
+    getVariant(key: string): string | null;
+    isInVariant(key: string, variant: string): boolean;
+    track(event: string): void;
+    consent(granted: boolean): string;
+  };
+};
+
+// The configuration specs serve the page through page.route, and Chrome's
+// Local Network Access check blocks a fulfilled document's calls to the mock
+// API on localhost. A test-host artifact: in production the API is a public
+// origin.
+test.use({ launchOptions: { args: ['--disable-features=LocalNetworkAccessChecks'] } });
 
 test.beforeEach(async ({ request }) => {
   await resetEvents(request);
 });
 
-test('applies the assigned treatment variant to the DOM', async ({ page }) => {
-  await page.goto(PAGE);
-  // The treatment's `text` change replaces #target-text once flame
-  // has fetched experiments, been assigned, and applied the variant.
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-});
+/** Fire an event from page code. */
+const track = (page: Page, event: string) =>
+  page.evaluate((e) => (window as unknown as FlameWindow).flame.track(e), event);
 
-test('applies every non-redirect change type', async ({ page }) => {
-  await page.goto(PAGE);
+/** Wait until flame's reads answer. */
+const ready = (page: Page) => page.evaluate(() => (window as unknown as FlameWindow).flame.ready);
 
-  // text — established above; assert again as the anchor for readiness.
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+/** A read of an experiment by slug, as page code makes it. */
+const read = (page: Page, key: string) =>
+  page.evaluate((k) => (window as unknown as FlameWindow).flame.getVariant(k), key);
 
-  // html — innerHTML replaced with new markup.
-  await expect(page.locator('#target-html strong')).toHaveText('Treatment markup');
+const eventTypes = async (request: Parameters<typeof getRecordedEvents>[0]) =>
+  (await getRecordedEvents(request)).map((e) => e.event_type);
 
-  // attribute — href swapped.
-  await expect(page.locator('#target-attribute')).toHaveAttribute(
-    'href',
-    'https://example.com/new'
-  );
+/** The rules file with a promoted winner added, as ember serves one (ADR 0039). */
+function rulesWithPromoted() {
+  const { id, slug, url_pattern, winner_promoted_at, winner } = PROMOTED_CONTRACT;
+  return { ...RULES, promoted: [{ id, slug, url_pattern, winner_promoted_at, winner }] };
+}
 
-  // class — added `treatment-class`, removed `remove-me`, kept `keep-this`.
-  await expect(page.locator('#target-class')).toHaveClass(/treatment-class/);
-  await expect(page.locator('#target-class')).toHaveClass(/keep-this/);
-  await expect(page.locator('#target-class')).not.toHaveClass(/remove-me/);
+// --- flame never changes the page (flame#63) -------------------------
+//
+// A MutationObserver starts before flame's script tag and records every
+// change to the document. Under each configuration flame starts, answers
+// reads, sends events and sees clicks, submits and a client-side
+// navigation; the page's own code changes nothing, so any record is
+// flame's.
 
-  // style — inline color + weight.
-  await expect(page.locator('#target-style')).toHaveCSS('color', 'rgb(16, 185, 129)');
-  await expect(page.locator('#target-style')).toHaveCSS('font-weight', '700');
+/** Runs before flame: records mutations, and stubs what flame used to touch. */
+const OBSERVER = `<script>
+  window.__mutations = [];
+  window.__pushState = history.pushState;
+  window.__replaceState = history.replaceState;
+  new MutationObserver(function (records) {
+    records.forEach(function (r) {
+      // The parser adding flame's own tag and the whitespace after it.
+      if (r.type === 'characterData' && !r.target.textContent.trim()) return;
+      var parsed =
+        r.type === 'childList' &&
+        r.removedNodes.length === 0 &&
+        Array.prototype.every.call(r.addedNodes, function (n) {
+          return (
+            (n.nodeType === 3 && !n.textContent.trim()) ||
+            (n.nodeName === 'SCRIPT' && /flame\\.js$/.test(n.getAttribute('src') || ''))
+          );
+        });
+      if (parsed) return;
+      window.__mutations.push(
+        r.type + ' on <' + r.target.nodeName + '>' + (r.attributeName ? ' ' + r.attributeName : '')
+      );
+    });
+  }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+</script>`;
 
-  // css — injected <style> rule adds an outline to .target-css.
-  await expect(page.locator('#target-css')).toHaveCSS('outline-color', 'rgb(16, 185, 129)');
+/** The anti-flicker snippet 0.x asked for, reduced to what flame called. */
+const ANTI_FLICKER = `<script>
+  window.__cupedAntiflicker = { reveal: function () { window.__revealed = true; } };
+</script>`;
 
-  // visibility — hidden via inline display:none.
-  await expect(page.locator('#target-visibility')).toBeHidden();
-});
+interface Configuration {
+  name: string;
+  /** Extra attributes on flame's script tag. */
+  attributes?: string;
+  /** Call `flame.consent(true)` once the page has loaded. */
+  consent?: boolean;
+  /** Serve this rules file instead of the mock's. */
+  rules?: () => unknown;
+  antiFlicker?: boolean;
+}
 
-test('fires a pageview event carrying the assignment', async ({ page, request }) => {
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+const CONFIGURATIONS: Configuration[] = [
+  { name: 'the stock install' },
+  { name: 'consent required and never given', attributes: 'data-consent="required"' },
+  { name: 'consent required, then given', attributes: 'data-consent="required"', consent: true },
+  {
+    name: 'the removed data-reapply and data-wait-for-hydration attributes',
+    attributes: 'data-reapply="true" data-wait-for-hydration="true"',
+  },
+  // The contract's winner still carries a `changes` payload.
+  { name: 'a promoted winner', rules: rulesWithPromoted },
+  {
+    name: 'a visitor in an active Holdout',
+    rules: () => ({
+      ...rulesWithPromoted(),
+      holdout: { id: 'hold_e2e', percentage: 100, active: true },
+    }),
+  },
+  { name: 'an anti-flicker snippet on the page', antiFlicker: true },
+];
 
-  await flushBeacons(page);
+for (const config of CONFIGURATIONS) {
+  test(`flame makes no change to the page: ${config.name}`, async ({ page, request }) => {
+    await page.route(PAGE, async (route) => {
+      const response = await route.fetch();
+      const html = (await response.text()).replace(
+        /<script\s+src="[^"]*flame\.js"/,
+        (tag) =>
+          `${config.antiFlicker ? ANTI_FLICKER : ''}${OBSERVER}\n${tag} ${config.attributes ?? ''}`
+      );
+      await route.fulfill({ response, body: html });
+    });
+    const rules = config.rules;
+    if (rules) await page.route('**/rules', (route) => route.fulfill({ json: rules() }));
 
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('pageview');
+    await page.goto(PAGE);
+    await ready(page);
+    if (config.consent) {
+      expect(
+        await page.evaluate(() => (window as unknown as FlameWindow).flame.consent(true))
+      ).toBe('granted');
+      await ready(page);
+    }
 
-  const pageview = (await getRecordedEvents(request)).find((e) => e.event_type === 'pageview');
-  expect(pageview?.experiment_assignments).toContainEqual({
-    experiment_id: 'exp_script_tag',
-    variant_id: 'var_script_treatment',
+    // Everything a page does with flame: reads, goals, a client-side navigation.
+    await read(page, SLUG);
+    await read(page, PROMOTED_CONTRACT.slug);
+    await page.evaluate(
+      (slug) => (window as unknown as FlameWindow).flame.isInVariant(slug, 'treatment'),
+      SLUG
+    );
+    await page.locator('.add-to-cart-cta').click();
+    await page.locator('#checkout-form button[type="submit"]').click();
+    await page.locator('#open-ticket').click();
+    await page.locator('#untracked-copy').click();
+    await page.evaluate(() => {
+      history.pushState({}, '', '?next');
+      history.back();
+    });
+    await track(page, 'marker');
+    await flushBeacons(page);
+    if (config.attributes?.includes('data-consent') && !config.consent) {
+      // flame sends nothing before consent: give it the time it would take.
+      await page.waitForTimeout(500);
+    } else {
+      await expect.poll(() => eventTypes(request)).toContain('marker');
+    }
+
+    const seen = await page.evaluate(() => {
+      const w = window as unknown as {
+        __mutations: string[];
+        __revealed?: boolean;
+        __pushState: unknown;
+        __replaceState: unknown;
+      };
+      return {
+        mutations: w.__mutations,
+        revealed: w.__revealed ?? false,
+        historyWrapped:
+          history.pushState !== w.__pushState || history.replaceState !== w.__replaceState,
+      };
+    });
+    expect(seen).toEqual({ mutations: [], revealed: false, historyWrapped: false });
+
+    // The observer sees a change when there is one.
+    await page.evaluate(() => document.body.setAttribute('data-touched', ''));
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __mutations: string[] }).__mutations))
+      .toEqual(['attributes on <BODY> data-touched']);
   });
+}
+
+// --- events ----------------------------------------------------------
+
+test('fetches the rules file, and records the arm the page reads before any event carries it', async ({
+  page,
+  request,
+}) => {
+  const asked: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().startsWith(`http://localhost:${PORTS.api}/`))
+      asked.push(`${r.method()} ${new URL(r.url()).pathname.split('/').slice(2).join('/')}`);
+  });
+
+  await page.goto(PAGE);
+  await ready(page);
+  expect(await read(page, SLUG)).toBe('var_script_treatment');
+  await track(page, 'marker');
+  await flushBeacons(page);
+  await expect.poll(() => eventTypes(request)).toContain('marker');
+
+  expect(asked.filter((a) => !a.endsWith('events'))).toEqual(['GET rules']);
+  const events = await getRecordedEvents(request);
+  const types = events.map((e) => e.event_type);
+  // The unread React experiment is never recorded.
+  const recorded = events
+    .filter((e) => e.event_type === '$assignment')
+    .map((e) => (e.metadata as { experiment_id: string }).experiment_id);
+  expect(recorded).toEqual(['exp_script_tag']);
+  // The pageview went out before the read, so it carries nothing.
+  expect(events.find((e) => e.event_type === 'pageview')?.experiment_assignments ?? []).toEqual([]);
+  expect(types.indexOf('$assignment')).toBeLessThan(types.indexOf('marker'));
+  expect(events.find((e) => e.event_type === 'marker')?.experiment_assignments).toEqual([ARM]);
 });
 
 test('fires a custom track() event on button click', async ({ page, request }) => {
   await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+  await ready(page);
 
   await page.getByRole('button', { name: 'Fire event' }).click();
   await flushBeacons(page);
 
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('demo_button_clicked');
+  await expect.poll(() => eventTypes(request)).toContain('demo_button_clicked');
 
   const event = (await getRecordedEvents(request)).find(
     (e) => e.event_type === 'demo_button_clicked'
@@ -103,28 +263,24 @@ for (const [goal, target] of GOAL_INTERACTIONS) {
     request,
   }) => {
     await page.goto(PAGE);
-    await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+    await ready(page);
+    await read(page, SLUG);
 
     await page.locator(target).click();
     await flushBeacons(page);
 
-    await expect
-      .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-      .toContain(goal);
+    await expect.poll(() => eventTypes(request)).toContain(goal);
 
     // One, not two: a goal listener on the same selector would add a second.
     const events = (await getRecordedEvents(request)).filter((e) => e.event_type === goal);
     expect(events).toHaveLength(1);
-    expect(events[0].experiment_assignments).toContainEqual({
-      experiment_id: 'exp_script_tag',
-      variant_id: 'var_script_treatment',
-    });
+    expect(events[0].experiment_assignments).toContainEqual(ARM);
   });
 }
 
 test('a click or submit the page does not track sends no goal event', async ({ page, request }) => {
   await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+  await ready(page);
 
   // Strip the page's own track() calls: what is left is what flame alone does
   // with a click and a submit on the contract's selectors.
@@ -138,259 +294,43 @@ test('a click or submit the page does not track sends no goal event', async ({ p
   await page.locator('#checkout-form button[type="submit"]').click();
   await page.locator('#open-ticket').click();
   await page.locator('#untracked-copy').click();
-  await page.evaluate(() =>
-    (window as unknown as { flame: { track(e: string): void } }).flame.track('marker')
-  );
+  await track(page, 'marker');
   await flushBeacons(page);
 
   // Wait for an event tracked after the clicks before asserting absence: a
   // goal event fired by the clicks would be queued ahead of it, so once it
   // lands, "not sent" is a real observation rather than "not sent yet".
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('marker');
+  await expect.poll(() => eventTypes(request)).toContain('marker');
 
-  const types = (await getRecordedEvents(request)).map((e) => e.event_type);
+  const types = await eventTypes(request);
   expect(types).not.toContain('cart_add_clicked');
   expect(types).not.toContain('checkout_complete');
   expect(types).not.toContain('support_ticket_opened');
+  expect(types).not.toContain('click');
   // A pageview goal's name is never an event name: flame fires the literal
   // `pageview`, which the backend matches by url_pattern.
   expect(types).not.toContain('pricing_viewed');
 });
 
-// Anti-flicker (flame#16). The naive assertion "#target-text is not the
-// control" passes even without a fix, because Playwright auto-waits until
-// the treatment has applied — it never observes the transient flash. To
-// give the red teeth we WIDEN the flash window (hold the experiments
-// roundtrip) and assert the anti-flicker *contract*: the document is
-// hidden until flame reveals it (on variant-resolve OR timeout). Today,
-// with no hide, the control is visible during the window → this fails for
-// the right reason (the flash). The SSR/next-app path renders flash-free
-// already (see next-app.spec.ts).
-test('does not flash the control before applying the treatment', async ({ page }) => {
-  // Hold /experiments/active so variants can't apply immediately. Without
-  // anti-flicker the control markup (which paints before the bottom script
-  // even runs) is visible for the whole delay — the flash we must kill.
-  await page.route('**/experiments/active*', async (route) => {
-    await new Promise((r) => setTimeout(r, 400));
-    await route.continue();
-  });
-
-  await page.goto(PAGE, { waitUntil: 'domcontentloaded' });
-
-  // While variants are still pending, the user must NOT see the control.
-  // Contract: the root is hidden (opacity 0) until flame reveals it.
-  const rootOpacityWhilePending = await page.evaluate(
-    () => getComputedStyle(document.documentElement).opacity
-  );
-  expect(rootOpacityWhilePending, 'root must be hidden until variants resolve').toBe('0');
-
-  // And it must end revealed on the treatment — not flashed, not stuck hidden.
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-  await expect
-    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).opacity))
-    .toBe('1');
-});
-
-// The timeout safety-net (flame#16). Instant-hide's whole strength is that
-// it doesn't wait on the network — which means a stalled/failed API would
-// leave the page hidden FOREVER unless a timeout reveals it. That would be
-// strictly worse than the flash (blank page vs. brief flash). So the reveal
-// must fire on resolve OR timeout, and the timeout must reveal the ORIGINAL,
-// never a blank. This test is proven red-first against a hide-with-no-timeout.
-test('reveals the original after the timeout when the API stalls (never left blank)', async ({
-  page,
-}) => {
-  // Stall /experiments/active so variants never resolve within the page's life.
-  await page.route('**/experiments/active*', async (route) => {
-    await new Promise((r) => setTimeout(r, 10_000));
-    await route.continue();
-  });
-
-  await page.goto(PAGE, { waitUntil: 'domcontentloaded' });
-
-  // Hidden instantly by the inline snippet.
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).opacity)).toBe('0');
-
-  // The timeout must reveal it — showing the ORIGINAL control, not blank, and
-  // not the treatment (which never resolved).
-  await expect
-    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).opacity), {
-      timeout: 4000,
-    })
-    .toBe('1');
-  await expect(page.locator('#target-text')).toContainText('Original text content.');
-});
-
-// One evaluation, then record on delivery (flame#46, ember ADR 0041).
-// flame#17 made the per-experiment /assign calls parallel; flame#46
-// replaces them with one /evaluate for every arm, which enrols nobody.
-// flame then records each arm it delivers as a $assignment event, ahead of
-// any event tagged with that arm.
-test('learns every arm from one /evaluate and records each delivered arm before the pageview', async ({
-  page,
-  request,
-}) => {
-  const asked: string[] = [];
-  page.on('request', (r) => {
-    if (/\/evaluate$|\/assign$/.test(r.url())) asked.push(new URL(r.url()).pathname);
-  });
-
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-  await flushBeacons(page);
-
-  expect(asked.filter((p) => p.endsWith('/evaluate'))).toHaveLength(1);
-  expect(asked.filter((p) => p.endsWith('/assign'))).toHaveLength(0);
-
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('pageview');
-  const events = await getRecordedEvents(request);
-  const types = events.map((e) => e.event_type);
-  const recorded = events
-    .filter((e) => e.event_type === '$assignment')
-    .map((e) => (e.metadata as { experiment_id: string }).experiment_id)
-    .sort();
-  expect(recorded).toEqual(['exp_react', 'exp_script_tag']);
-  expect(types.lastIndexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
-});
-
-// The same order when flame answers while the page is still loading: the
-// recommended install (an async flame tag in <head>, spark#393) on a page
-// whose parsing a slow script holds up. Apply then waits for
-// DOMContentLoaded, and nothing tagged may go out before the record.
-// On the stock example (flame at the end of <body>) the page has already
-// parsed when flame answers, so the test above cannot tell the order apart.
-test('records before the pageview when flame answers while the page is still loading', async ({
-  page,
-  request,
-}) => {
-  // A served fixture, not a route-fulfilled page: Chromium treats a
-  // fulfilled document as public and blocks its calls to the localhost mock.
-  const SLOW_PAGE = 'http://localhost:8789/e2e/fixtures/pages/async-head.html';
-  // Long enough that flame answers first, short enough to beat the snippet's
-  // 1 s timeout (past it, the original is revealed and flame skips: a
-  // different case, covered in the unit tests).
-  await page.route('**/__slow-page.js', async (route) => {
-    await new Promise((r) => setTimeout(r, 600));
-    await route.fulfill({ contentType: 'text/javascript', body: '' });
-  });
-  let evaluatedAt = 0;
-  page.on('response', (r) => {
-    if (r.url().endsWith('/evaluate')) evaluatedAt = Date.now();
-  });
-
-  await page.goto(SLOW_PAGE, { waitUntil: 'domcontentloaded' });
-  const loadedAt = Date.now();
-  // Precondition: flame had its answer before the page finished parsing,
-  // which is the case this test exists for.
-  expect(evaluatedAt, 'flame answered while the page was loading').toBeGreaterThan(0);
-  expect(evaluatedAt).toBeLessThan(loadedAt);
-
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-  await flushBeacons(page);
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('pageview');
-  const types = (await getRecordedEvents(request)).map((e) => e.event_type);
-  expect(types).toContain('$assignment');
-  expect(types.lastIndexOf('$assignment')).toBeLessThan(types.indexOf('pageview'));
-});
-
 // --- promoted winners (flame#42, cuped-io/ember#300) -----------------
-//
-// Promotion concludes an experiment, so ember moves it from `experiments`
-// to `promoted` — and a flame that only reads `experiments` silently
-// reverts every visitor to the original. These serve the shared contract
-// (`PROMOTED_CONTRACT`, the byte-identical twin of ember's golden
-// fixture) and assert the winner reaches the page.
 
-/**
- * Serve the promoted contract from `/experiments/active`. The script-tag
- * experiment is dropped because it targets `#target-text` too; the React
- * experiment stays, so events still carry an assignment to compare with.
- */
-async function servePromotedContract(page: Page): Promise<void> {
-  await page.route('**/experiments/active', async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { experiments: { id: string }[] };
-    await route.fulfill({
-      response,
-      json: {
-        experiments: body.experiments.filter((e) => e.id !== 'exp_script_tag'),
-        promoted: [PROMOTED_CONTRACT],
-      },
-    });
-  });
-}
-
-test('applies a promoted winner from the contract payload', async ({ page }) => {
-  await servePromotedContract(page);
+test('a promoted winner is read, but never recorded or carried', async ({ page, request }) => {
+  await page.route('**/rules', (route) => route.fulfill({ json: rulesWithPromoted() }));
   await page.goto(PAGE);
+  await ready(page);
 
-  await expect(page.locator('#target-text')).toHaveText('Promoted winner text');
-});
-
-test('keeps the original for a visitor held out of a promoted winner', async ({ page }) => {
-  await servePromotedContract(page);
-  // ember holds this visitor out of the promoted winner (ADR 0024).
-  await page.route('**/evaluate', async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { evaluations: { experiment_id: string }[] };
-    await route.fulfill({
-      response,
-      json: {
-        evaluations: body.evaluations.map((e) =>
-          e.experiment_id === PROMOTED_CONTRACT.id
-            ? {
-                ...e,
-                variant_id: null,
-                variant_name: null,
-                is_control: null,
-                resolution: 'held_out',
-              }
-            : e
-        ),
-      },
-    });
-  });
-  await page.goto(PAGE);
-
-  // Revealed on the original, not the winner.
-  await expect
-    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).opacity))
-    .toBe('1');
-  await expect(page.locator('#target-text')).toContainText('Original text content.');
-});
-
-test('sends no events for a promoted experiment', async ({ page, request }) => {
-  await servePromotedContract(page);
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Promoted winner text');
-
+  expect(await read(page, PROMOTED_CONTRACT.slug)).toBe(PROMOTED_CONTRACT.winner.id);
+  await read(page, SLUG);
   await page.getByRole('button', { name: 'Fire event' }).click();
   await flushBeacons(page);
-
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('demo_button_clicked');
+  await expect.poll(() => eventTypes(request)).toContain('demo_button_clicked');
 
   const events = await getRecordedEvents(request);
-  // Events do carry assignments — just never the concluded experiment's.
-  expect(events.find((e) => e.event_type === 'pageview')?.experiment_assignments).toContainEqual({
-    experiment_id: 'exp_react',
-    variant_id: 'var_react_treatment',
-  });
-  const experimentIds = events.flatMap(
-    (e) => e.experiment_assignments?.map((a) => a.experiment_id) ?? []
-  );
-  expect(experimentIds).not.toContain(PROMOTED_CONTRACT.id);
-  // Nor is it recorded: its results are frozen (flame#46).
+  expect(
+    events.find((e) => e.event_type === 'demo_button_clicked')?.experiment_assignments
+  ).toEqual([ARM]);
   const recordedIds = events
     .filter((e) => e.event_type === '$assignment')
     .map((e) => (e.metadata as { experiment_id: string }).experiment_id);
-  expect(recordedIds).toContain('exp_react');
-  expect(recordedIds).not.toContain(PROMOTED_CONTRACT.id);
+  expect(recordedIds).toEqual(['exp_script_tag']);
 });

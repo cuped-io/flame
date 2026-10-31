@@ -334,4 +334,17 @@ describe('the page', () => {
     observer.disconnect();
     expect(changes).toEqual([]);
   });
+
+  it('a click on an element an older flame marked as changed sends nothing', async () => {
+    document.body.innerHTML =
+      '<button id="cta" data-flame-modified="true" data-flame-selector="#cta">Buy</button>';
+    stubApi();
+    const flame = fresh();
+    await flame.init({ dsn: DSN, enableBatching: false });
+    flame.getVariant(EXP);
+    document.getElementById('cta')!.click();
+    flame.track('marker');
+    await vi.waitFor(() => expect(sent.map((e) => e.event_type)).toContain('marker'));
+    expect(sent.map((e) => e.event_type)).not.toContain('click');
+  });
 });

@@ -52,7 +52,6 @@ export class TrackingManager {
   private assignments: Map<string, StoredAssignment>;
   private userId: string;
   private debug: boolean;
-  private clickHandler: ((event: MouseEvent) => void) | null = null;
   private queue: EventQueue | null = null;
   private enableBatching: boolean;
 
@@ -82,7 +81,7 @@ export class TrackingManager {
    * Switch the user every later event is stamped with (identify, logout).
    * Events already created keep the ID they were created under, since
    * `track` stamps `user_id` at creation. One manager across identity
-   * changes, so the listener and the queue are never duplicated or
+   * changes, so the queue is never duplicated or
    * dropped (flame#36).
    */
   setUserId(userId: string): void {
@@ -97,38 +96,13 @@ export class TrackingManager {
   }
 
   /**
-   * Start listening for clicks on elements a variant changed. No listener
-   * fires goals (flame#60): the page fires them with `track()`, and the
-   * pageview goes out from `trackPageview()`.
-   */
-  startAutoTracking(): void {
-    if (this.clickHandler) {
-      return;
-    }
-
-    this.clickHandler = (event: MouseEvent) => {
-      this.handleClick(event);
-    };
-
-    document.addEventListener('click', this.clickHandler, true);
-
-    if (this.debug) {
-      console.log('[Flame] Started auto-tracking clicks on changed elements');
-    }
-  }
-
-  /**
    * Shut down for consent withdrawal (flame#18) and send nothing more.
-   * Unlike stopAutoTracking, which flushes first, this DROPS what is queued.
+   * Unlike `stop()`, which flushes first, this DROPS what is queued.
    * Synchronous, so no unload or tab-hide flush can interleave; the order
    * (disarm the flush triggers, drop the queue, delete the retry store) is
    * insurance should an await ever be added.
    */
   discard(): void {
-    if (this.clickHandler) {
-      document.removeEventListener('click', this.clickHandler, true);
-      this.clickHandler = null;
-    }
     if (this.queue) {
       this.queue.stop();
       this.queue.clear();
@@ -137,62 +111,13 @@ export class TrackingManager {
   }
 
   /**
-   * Stop auto-tracking
+   * Send what is queued and stop the flush timer.
    */
-  stopAutoTracking(): void {
-    if (this.clickHandler) {
-      document.removeEventListener('click', this.clickHandler, true);
-      this.clickHandler = null;
-    }
-
-    // Stop the queue (flushes remaining events)
+  stop(): void {
     if (this.queue) {
       this.queue.flush();
       this.queue.stop();
     }
-
-    if (this.debug) {
-      console.log('[Flame] Stopped auto-tracking');
-    }
-  }
-
-  /**
-   * Handle a click event
-   */
-  private handleClick(event: MouseEvent): void {
-    const target = event.target as Element;
-    if (!target) {
-      return;
-    }
-
-    if (this.debug) {
-      console.log('[Flame] Click detected on:', target.tagName, target.className);
-    }
-
-    // Check if the clicked element was modified by Flame (variant applied)
-    const modifiedElement = this.findModifiedElement(target);
-    if (modifiedElement) {
-      const selector = modifiedElement.getAttribute('data-flame-selector');
-      if (selector) {
-        this.track('click', { selector, variant_click: true });
-      }
-    }
-  }
-
-  /**
-   * Find the closest element modified by Flame
-   */
-  private findModifiedElement(element: Element): Element | null {
-    let current: Element | null = element;
-
-    while (current) {
-      if (current.getAttribute('data-flame-modified') === 'true') {
-        return current;
-      }
-      current = current.parentElement;
-    }
-
-    return null;
   }
 
   // ============================================================================

@@ -158,7 +158,7 @@ That's it — `useExperiment` and `<Experiment>` work the same way as Option 2.
 
 ## Examples
 
-- [`examples/script-tag`](./examples/script-tag) — Static HTML page exercising all 8 change types.
+- [`examples/script-tag`](./examples/script-tag) — Static HTML page that loads flame from a script tag and fires goals with `flame.track()`.
 - [`examples/next-app`](./examples/next-app) — Next.js App Router app with edge middleware + signed prehydrated cookie. Includes verification steps.
 
 ## Documentation

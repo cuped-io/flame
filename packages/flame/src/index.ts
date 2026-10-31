@@ -583,7 +583,7 @@ class Flame {
    * Forget every arm and stop: reads answer `null` until the next init.
    */
   reset(): void {
-    this.trackingManager?.stopAutoTracking();
+    this.trackingManager?.stop();
     this.arms = [];
     this.rules = null;
     this.exposed.clear();
@@ -624,19 +624,7 @@ function autoInit(): void {
   const requireConsent = scriptElement.getAttribute('data-consent') === 'required';
   const consentApply =
     scriptElement.getAttribute('data-consent-apply') === 'next-page' ? 'next-page' : 'immediate';
-  // Absent: auto-detect React SSR frameworks. "true"/"false": force (#44).
-  const hydrationAttr = scriptElement.getAttribute('data-wait-for-hydration');
-  const waitForHydration =
-    hydrationAttr === 'true' ? true : hydrationAttr === 'false' ? false : undefined;
-  const reapplyOnChange = scriptElement.getAttribute('data-reapply') !== 'false';
-  flame.init({
-    dsn,
-    debug,
-    requireConsent,
-    consentApply,
-    waitForHydration,
-    reapplyOnChange,
-  });
+  flame.init({ dsn, debug, requireConsent, consentApply });
 }
 
 // Run auto-init
@@ -650,15 +638,6 @@ export type {
   Experiment,
   PromotedExperiment,
   Variant,
-  VariantChange,
-  TextChange,
-  HtmlChange,
-  AttributeChange,
-  ClassChange,
-  StyleChange,
-  CssChange,
-  VisibilityChange,
-  RedirectChange,
   StoredAssignment,
   StoredAssignment as Assignment,
   Goal,

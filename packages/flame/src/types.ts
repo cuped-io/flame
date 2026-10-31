@@ -43,21 +43,6 @@ export interface FlameConfig {
    */
   consentApply?: 'immediate' | 'next-page';
   /**
-   * Apply a variant only once React has hydrated its target element
-   * (flame#44). Applying before hydration makes React throw #418 and
-   * discard the variant. Script tag: `data-wait-for-hydration="true"`.
-   * Ignored since flame stopped changing the page (flame#24); removed in flame#63.
-   */
-  waitForHydration?: boolean;
-  /**
-   * Keep watching the page after the first apply, and apply a variant to a
-   * target that appears without it: a framework re-created it (a remount,
-   * client-side navigation). Default true (flame#45). Script tag:
-   * `data-reapply="false"` turns it off. Ignored since flame stopped changing
-   * the page (flame#24); removed in flame#63.
-   */
-  reapplyOnChange?: boolean;
-  /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
    * fetches no rules file and reads these at once (flame#24). Produced by
    * `@cuped-io/flame-edge` for SSR zero-flash; the React SDK forwards
@@ -87,140 +72,6 @@ export interface PrehydratedState {
 }
 
 /**
- * Replace `element.textContent` of the matched element.
- *
- * The lowest-risk change type — won't reflow markup or break event
- * handlers attached to children. If the element has child elements,
- * setting textContent will collapse them; use `html` instead when
- * markup needs to be preserved.
- */
-export interface TextChange {
-  type: 'text';
-  /** CSS selector to find the element */
-  selector: string;
-  /** New text content to apply */
-  value: string;
-}
-
-/**
- * Replace `element.innerHTML` of the matched element.
- *
- * Use when the variant needs different markup, not just different
- * copy. Higher risk than `text` — invalid markup can break the
- * surrounding layout, and event listeners attached to replaced
- * children are detached.
- */
-export interface HtmlChange {
-  type: 'html';
-  selector: string;
-  /** New HTML to set as innerHTML */
-  value: string;
-}
-
-/**
- * Set an attribute on the matched element.
- *
- * Common uses: `href` on links, `src` on images, `class` (whole
- * value), `aria-*` for a11y experiments, `data-*` for analytics.
- * For incremental class add/remove use `class` instead.
- */
-export interface AttributeChange {
-  type: 'attribute';
-  selector: string;
-  /** Attribute name (e.g. "href", "src", "aria-label") */
-  attribute: string;
-  /** New attribute value */
-  value: string;
-}
-
-/**
- * Add and/or remove classes on the matched element.
- *
- * Composes cleanly with the customer's existing styles. Both `add`
- * and `remove` are optional; supply at least one.
- */
-export interface ClassChange {
-  type: 'class';
-  selector: string;
-  /** Classes to add (no-op if already present) */
-  add?: string[];
-  /** Classes to remove (no-op if not present) */
-  remove?: string[];
-}
-
-/**
- * Set inline styles on the matched element.
- *
- * Keys can be camelCase (`backgroundColor`) or kebab-case
- * (`background-color`); both are normalized to CSS property names.
- * For styles that should affect many elements at once, prefer `css`.
- */
-export interface StyleChange {
-  type: 'style';
-  selector: string;
-  /** Map of CSS property → value */
-  styles: Record<string, string>;
-}
-
-/**
- * Inject a `<style>` tag with raw CSS into the document head.
- *
- * High value-per-line — one rule can restyle many elements at once.
- * No selector field; the CSS itself contains its own selectors.
- */
-export interface CssChange {
-  type: 'css';
-  /** Raw CSS to inject. Use standard selectors inside. */
-  css: string;
-}
-
-/**
- * Show or hide the matched element via inline `display`.
- *
- * Convenience over `style` for the common "show/hide a section"
- * test. `visible: false` sets `display: none`; `visible: true`
- * clears the inline display so the element falls back to its
- * stylesheet-defined display value.
- */
-export interface VisibilityChange {
-  type: 'visibility';
-  selector: string;
-  visible: boolean;
-}
-
-/**
- * Force navigation to a different URL when this variant is assigned.
- *
- * Fires before any other changes are applied. Useful for split-URL
- * tests (e.g. `/pricing-v1` vs `/pricing-v2`) where the variant is
- * a whole different page rather than a tweak to the current one.
- *
- * Caveat: irreversible by `rollbackChanges()` — once we navigate,
- * there's nothing left to roll back.
- */
-export interface RedirectChange {
-  type: 'redirect';
-  /** Destination URL (absolute or root-relative) */
-  url: string;
-}
-
-/**
- * A variant change to apply to the DOM.
- *
- * Discriminated union over the supported change types. Add new
- * change types here and in `flame/src/apply.ts`'s dispatch.
- */
-export type VariantChange =
-  | TextChange
-  | HtmlChange
-  | AttributeChange
-  | ClassChange
-  | StyleChange
-  | CssChange
-  | VisibilityChange
-  | RedirectChange;
-
-/**
  * A variant in an experiment (matches the cuped API)
  */
 export interface Variant {
@@ -240,8 +91,6 @@ export interface Variant {
   created_at?: string;
   /** Timestamp when last updated. The rules file does not carry it. */
   updated_at?: string;
-  /** Changes to apply for this variant (stored as as JSON metadata) */
-  changes?: VariantChange[];
 }
 
 /**
@@ -342,7 +191,7 @@ export interface PromotedExperiment {
   slug: string;
   /** Timestamp when the winner was promoted */
   winner_promoted_at: string;
-  /** The promoted variant, whose changes every non-held-out visitor sees */
+  /** The promoted variant, served to every visitor not held out */
   winner: Variant;
 }
 

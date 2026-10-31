@@ -49,12 +49,10 @@ export const CONTRACT_GOALS = JSON.parse(
  * it (cuped-io/ember#300, ADR 0039): a concluded experiment whose winner
  * every visitor not held out should see. Byte-identical twin of ember's
  * `crates/ember-core/tests/contracts/experiments_active_promoted.json`,
- * paired the same way as `CONTRACT_GOALS`. Its winner targets
- * `#target-text` on the script-tag example page.
+ * paired the same way as `CONTRACT_GOALS`.
  *
- * Not in the default `/experiments/active` response: it would fight the
- * script-tag experiment over `#target-text`. Specs that want it splice it
- * in with `page.route`.
+ * Not in the default responses. Specs that want it splice it in with
+ * `page.route`.
  */
 export const PROMOTED_CONTRACT = JSON.parse(
   readFileSync(
@@ -77,10 +75,8 @@ export const PORTS = {
 export const TEST_DSN = `http://${TEST_API_KEY}@localhost:${PORTS.api}`;
 
 /**
- * Script-tag experiment. Its treatment variant carries one change of
- * each non-redirect type, targeting the selectors baked into
- * `examples/script-tag/index.html`. (redirect is omitted on purpose —
- * it would navigate the page away mid-test.)
+ * Script-tag experiment. flame changes nothing on the page for it
+ * (flame#63): the specs read it with `flame.getVariant`.
  *
  * Its `goals` are the shared contract instance — the same JSON cuped
  * emits — so the goal specs exercise the real payload rather
@@ -88,8 +84,9 @@ export const TEST_DSN = `http://${TEST_API_KEY}@localhost:${PORTS.api}`;
  */
 export const SCRIPT_TAG_EXPERIMENT = {
   id: 'exp_script_tag',
+  slug: 'script-tag-demo',
   project_id: 'proj_e2e',
-  name: 'Script-tag change types',
+  name: 'Script-tag reads',
   description: null,
   status: 'running',
   created_at: '2026-01-01T00:00:00.000Z',
@@ -104,7 +101,6 @@ export const SCRIPT_TAG_EXPERIMENT = {
       is_control: true,
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
-      changes: [],
     },
     {
       id: 'var_script_treatment',
@@ -114,35 +110,18 @@ export const SCRIPT_TAG_EXPERIMENT = {
       is_control: false,
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
-      changes: [
-        { type: 'text', selector: '#target-text', value: 'Treatment headline!' },
-        { type: 'html', selector: '#target-html', value: '<strong>Treatment markup</strong>' },
-        {
-          type: 'attribute',
-          selector: '#target-attribute',
-          attribute: 'href',
-          value: 'https://example.com/new',
-        },
-        { type: 'class', selector: '#target-class', add: ['treatment-class'], remove: ['remove-me'] },
-        {
-          type: 'style',
-          selector: '#target-style',
-          styles: { color: 'rgb(16, 185, 129)', 'font-weight': '700' },
-        },
-        { type: 'css', css: '.target-css { outline: 3px solid rgb(16, 185, 129); }' },
-        { type: 'visibility', selector: '#target-visibility', visible: false },
-      ],
     },
   ],
 };
 
 /**
  * React experiment. The next-app example branches on variant *name*
- * (`control` / `treatment`), so no DOM changes are needed here. Its id
+ * (`control` / `treatment`). Its id
  * is fed to the app via `NEXT_PUBLIC_CUPED_EXPERIMENT_ID`.
  */
 export const REACT_EXPERIMENT = {
   id: 'exp_react',
+  slug: 'react-demo',
   project_id: 'proj_e2e',
   name: 'React variant',
   description: null,
@@ -159,7 +138,6 @@ export const REACT_EXPERIMENT = {
       is_control: true,
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
-      changes: [],
     },
     {
       id: 'var_react_treatment',
@@ -169,7 +147,6 @@ export const REACT_EXPERIMENT = {
       is_control: false,
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
-      changes: [],
     },
   ],
 };
@@ -185,3 +162,27 @@ export function treatmentVariantFor(experimentId) {
   if (!exp) return null;
   return exp.variants.find((v) => v.name === 'treatment') ?? null;
 }
+
+/**
+ * The project's rules file as ember serves it at `GET /{api_key}/rules`
+ * (ember#309), from `EXPERIMENTS`. Control weighs 0, so every visitor's
+ * local pick is treatment, the same arm the other endpoints answer.
+ */
+export const RULES = {
+  version: 1,
+  experiments: EXPERIMENTS.map((e) => ({
+    id: e.id,
+    slug: e.slug,
+    url_pattern: null,
+    variants: e.variants
+      .map((v) => ({
+        id: v.id,
+        name: v.name,
+        is_control: v.is_control,
+        weight: v.is_control ? 0 : 1,
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  })),
+  holdout: null,
+  promoted: [],
+};

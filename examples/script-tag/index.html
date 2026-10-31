@@ -4,32 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Anti-flicker (flame#16, Option B): a tiny inline snippet hides the page
-         instantly (zero network dependency), then flame reveals it on
-         variant-resolve OR on the timeout safety-net below. This is what a
-         customer pastes (spark generates it, spark#251). -->
-    <style id="cuped-af-hide">
-      html {
-        opacity: 0 !important;
-      }
-    </style>
-    <script>
-      (function () {
-        var af = { revealed: false };
-        af.reveal = function () {
-          if (af.revealed) return; // idempotent: resolve + timeout can both fire
-          af.revealed = true;
-          var s = document.getElementById('cuped-af-hide');
-          if (s && s.parentNode) s.parentNode.removeChild(s);
-        };
-        window.__cupedAntiflicker = af;
-        // Safety-net: if flame hasn't revealed within the window (slow/failed
-        // API), reveal the ORIGINAL so the page is never left hidden. Instant
-        // hide is only safe because this guarantees a reveal.
-        setTimeout(af.reveal, 1000);
-      })();
-    </script>
-
     <title>cuped.io flame script-tag test page</title>
     <style>
       body {
@@ -52,13 +26,6 @@
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: #888;
-      }
-      .target {
-        padding: 0.5rem 1rem;
-        border: 2px dashed #cbd5e1;
-        border-radius: 0.375rem;
-        display: inline-block;
-        margin: 0.25rem 0;
       }
       .controls {
         margin-top: 2rem;
@@ -94,79 +61,15 @@
     </style>
   </head>
   <body>
-    <h1>cuped.io flame v0.2.0 — script-tag change-type test page</h1>
+    <h1>cuped.io flame — script-tag test page</h1>
     <p>
-      Each block below is a target for one of the 8 change types flame supports as of v0.2.0.
-      Configure variants in your cuped dashboard targeting these selectors, then load this page
-      with the script tag pointed at your DSN.
+      flame picks this visitor's variants from your project's rules file and never changes the
+      page. Your code reads a variant with <code>flame.getVariant('experiment-slug')</code> once
+      <code>flame.ready</code> resolves, and renders it.
     </p>
 
-    <section id="target-text-section">
-      <h2>1. text — replace textContent</h2>
-      <p class="target" id="target-text" data-cuped-test="text">
-        Original text content. (selector: <code>#target-text</code>)
-      </p>
-      <pre>{ "type": "text", "selector": "#target-text", "value": "New text!" }</pre>
-    </section>
-
-    <section id="target-html-section">
-      <h2>2. html — replace innerHTML</h2>
-      <div class="target" id="target-html" data-cuped-test="html">
-        <span>Original</span> <em>markup</em>. (selector: <code>#target-html</code>)
-      </div>
-      <pre>{ "type": "html", "selector": "#target-html", "value": "&lt;strong&gt;New markup&lt;/strong&gt;" }</pre>
-    </section>
-
-    <section id="target-attribute-section">
-      <h2>3. attribute — set arbitrary attribute</h2>
-      <a id="target-attribute" href="https://example.com/original" class="target"
-        >Original href: <code>https://example.com/original</code></a
-      >
-      <pre>{ "type": "attribute", "selector": "#target-attribute", "attribute": "href", "value": "https://example.com/new" }</pre>
-    </section>
-
-    <section id="target-class-section">
-      <h2>4. class — add/remove classes</h2>
-      <p class="target keep-this remove-me" id="target-class">
-        classes: <code>keep-this remove-me</code>. (selector: <code>#target-class</code>)
-      </p>
-      <pre>{ "type": "class", "selector": "#target-class", "add": ["new-class"], "remove": ["remove-me"] }</pre>
-    </section>
-
-    <section id="target-style-section">
-      <h2>5. style — inline styles</h2>
-      <p class="target" id="target-style" style="color: #0f172a">
-        Default color. (selector: <code>#target-style</code>)
-      </p>
-      <pre>{ "type": "style", "selector": "#target-style", "styles": { "color": "#10b981", "font-weight": "700" } }</pre>
-    </section>
-
-    <section id="target-css-section">
-      <h2>6. css — inject &lt;style&gt; tag globally</h2>
-      <p class="target target-css" id="target-css">
-        Restyled by global CSS rule. (class: <code>.target-css</code>)
-      </p>
-      <pre>{ "type": "css", "css": ".target-css { background: #fef3c7; border-style: solid; }" }</pre>
-    </section>
-
-    <section id="target-visibility-section">
-      <h2>7. visibility — show/hide</h2>
-      <div class="target" id="target-visibility">
-        Visible. (selector: <code>#target-visibility</code>)
-      </div>
-      <pre>{ "type": "visibility", "selector": "#target-visibility", "visible": false }</pre>
-    </section>
-
-    <section id="target-redirect-section">
-      <h2>8. redirect — force navigation</h2>
-      <p>
-        Cannot show inline — when active, this variant immediately navigates the page elsewhere.
-      </p>
-      <pre>{ "type": "redirect", "url": "/some-other-page" }</pre>
-    </section>
-
     <section id="goal-targets-section">
-      <h2>9. goals — fired by your own <code>flame.track()</code> calls</h2>
+      <h2>goals — fired by your own <code>flame.track()</code> calls</h2>
       <p>
         flame listens to no click or submit for goals. Your page fires an event
         <em>named after the goal</em> with <code>flame.track(goal.name)</code> — which is what the
@@ -210,7 +113,7 @@
       <p>
         After loading: open DevTools → Console for the <code>[Flame]</code> debug logs (if
         <code>data-debug="true"</code> is set on the script tag), and Network for the API calls
-        (<code>/experiments/active</code>, <code>/evaluate</code>, <code>/events</code>).
+        (<code>/rules</code>, <code>/events</code>).
       </p>
       <button onclick="window.flame && window.flame.track('demo_button_clicked', { source: 'script-tag-example' })">
         Fire event

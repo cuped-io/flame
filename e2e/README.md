@@ -7,15 +7,16 @@ environment. Complements the packages' 260+ unit tests with a
 
 ## What it covers
 
-| Spec                       | Example               | Asserts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tests/script-tag.spec.ts` | `examples/script-tag` | Assignment applies across every non-redirect change type (`text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`); a `pageview` event and a `track()` event fire with the assignment attached; **goals by `track()`** (flame#60) — the page's `track()` for a click goal, a submit goal and a project guardrail each sends one event named after the goal, and a click or submit the page does not track sends none; **promoted winners** — the promoted contract's winner applies, a held-out visitor keeps the original, and no event carries the promoted experiment; **record on delivery** (flame#46) — one `/evaluate`, no `/assign`, and each delivered arm's `$assignment` record arrives before the pageview, including when flame answers while the page is still loading (`fixtures/pages/async-head.html`); **anti-flicker** — the page stays hidden until variants apply, and a stalled API reveals the original after the timeout. |
-| `tests/next-app.spec.ts`   | `examples/next-app`   | Zero-flash SSR — the assigned variant is in the server HTML on a warm (cookie'd) visit; `useExperiment` / `<Experiment>` render the treatment; `useTrack` fires an event with the React assignment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Spec                       | Example               | Asserts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/script-tag.spec.ts` | `examples/script-tag` | **flame never changes the page** (flame#63) — a MutationObserver started before flame records nothing, `history` is not wrapped and an anti-flicker snippet is never revealed, across the stock install, consent required (withheld and given), the removed `data-reapply`/`data-wait-for-hydration` attributes, a promoted winner, a Holdout member and an anti-flicker snippet; **rules file** (flame#24) — one `GET /rules` and nothing else before events, the arm the page reads is recorded before any event carries it, and an unread experiment is never recorded; a `track()` event fires; **goals by `track()`** (flame#60) — the page's `track()` for a click goal, a submit goal and a project guardrail each sends one event named after the goal, carrying the arm, and a click or submit the page does not track sends none; **promoted winners** — a read answers the winner, which is never recorded or carried. |
+| `tests/next-app.spec.ts`   | `examples/next-app`   | Zero-flash SSR — the assigned variant is in the server HTML on a warm (cookie'd) visit; `useExperiment` / `<Experiment>` render the treatment; `useTrack` fires an event with the React assignment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
-The SSR path renders flash-free, and the script-tag path is flash-free
-behind the anti-flicker snippet (flame#16); both are asserted for real.
+The SSR path renders flash-free. On the script-tag path flame changes
+nothing, so there is nothing to flash.
 
-The mock serves `/evaluate` as ember does (ADR 0041), and its `/events`
+The mock serves the rules file (`fixtures/experiments.mjs` `RULES`) to
+flame and `/evaluate` to flame-edge, as ember does, and its `/events`
 refuses a whole envelope over one malformed `$assignment`, as ember does,
 so a bad record fails the suite instead of being accepted.
 
@@ -62,19 +63,19 @@ means changing that page.
 golden instance, for one entry of the `promoted` list
 `/experiments/active` serves alongside `experiments`. Its twin is
 ember's `crates/ember-core/tests/contracts/experiments_active_promoted.json`.
-The mock's `/evaluate` answers it with the winner, and flame records
-nothing for it. It is not in the default response (its winner targets
-`#target-text`, as the script-tag experiment's treatment does), so the
-promoted specs splice it in with `page.route`.
+The promoted specs splice it into the rules file with `page.route`;
+a read answers the winner, and flame records nothing for it. The
+contract's winner still carries a `changes` payload, which flame
+ignores: the page is unchanged.
 
 ## How it works
 
 Playwright's `webServer` boots three processes for the run:
 
 1. **Mock cuped API** (`mock-server/api.mjs`) — deterministic
-   `experiments/active`, `assign`, `identity/link`, and `events`
-   endpoints, plus `/_test/events` + `/_test/reset` so specs can assert
-   on what the SDK sent. Everyone is assigned the **treatment** variant.
+   `rules`, `experiments/active`, `evaluate`, `assign`,
+   `identity/link`, and `events` endpoints, plus `/_test/events` +
+   `/_test/reset` so specs can assert on what the SDK sent. Everyone is assigned the **treatment** variant.
 2. **Static host** (`mock-server/static.mjs`) — serves the repo so the
    script-tag example's relative `dist/flame.js` resolves, and rewrites
    its placeholder `data-dsn` to the live mock DSN.
