@@ -1,19 +1,11 @@
 import type {
   StoredAssignment,
-  Goal,
   ExperimentAssignment,
   CreateEventRequest,
   IdentityMetadata,
 } from './types';
 import type { ApiClient } from './api';
 import { EventQueue, type EventQueueConfig } from './queue';
-
-/**
- * Registered goal for auto-detection
- */
-interface RegisteredGoal {
-  goal: Goal;
-}
 
 /**
  * Configuration for the tracking manager
@@ -61,8 +53,6 @@ export class TrackingManager {
   private userId: string;
   private debug: boolean;
   private clickHandler: ((event: MouseEvent) => void) | null = null;
-  private submitHandler: ((event: SubmitEvent) => void) | null = null;
-  private registeredGoals: RegisteredGoal[] = [];
   private queue: EventQueue | null = null;
   private enableBatching: boolean;
 
@@ -92,7 +82,7 @@ export class TrackingManager {
    * Switch the user every later event is stamped with (identify, logout).
    * Events already created keep the ID they were created under, since
    * `track` stamps `user_id` at creation. One manager across identity
-   * changes, so listeners, goals and the queue are never duplicated or
+   * changes, so the listener and the queue are never duplicated or
    * dropped (flame#36).
    */
   setUserId(userId: string): void {
@@ -107,49 +97,9 @@ export class TrackingManager {
   }
 
   /**
-   * Register goals for DOM auto-tracking. Only `click` and `submit`
-   * goals get registered here — they need DOM listeners on
-   * `goal.selector` so the SDK can fire `goal.name` when the user
-   * clicks/submits a matching element.
-   *
-   * `pageview` and `custom` goals are intentionally skipped:
-   * - `pageview` is fired by `trackPageview()` (called from `init`
-   *   and on SPA navigation).
-   * - `custom` is fired manually by the developer via
-   *   `flame.track(goal.name)` / `useTrack()` — there's no DOM
-   *   event to listen to.
-   */
-  registerGoals(_experimentId: string, goals: Goal[]): void {
-    for (const goal of goals) {
-      if (goal.type === 'click' || goal.type === 'submit') {
-        this.registeredGoals.push({ goal });
-      }
-    }
-    if (this.debug && goals.length > 0) {
-      console.log(`[Flame] Registered ${goals.length} goals for auto-detection`);
-    }
-  }
-
-  /**
-   * Register global goals (e.g., e-commerce auto-detection)
-   */
-  registerGlobalGoals(goals: Goal[]): void {
-    if (this.debug) {
-      console.log(`[Flame] Registering ${goals.length} global goals`);
-      for (const goal of goals) {
-        const selectorPreview = goal.selector ? goal.selector.substring(0, 100) : 'N/A';
-        console.log(`[Flame] Global goal: ${goal.name} (${goal.type}) - ${selectorPreview}...`);
-      }
-    }
-    for (const goal of goals) {
-      if (goal.type === 'click' || goal.type === 'submit') {
-        this.registeredGoals.push({ goal });
-      }
-    }
-  }
-
-  /**
-   * Start auto-tracking clicks and form submissions
+   * Start listening for clicks on elements a variant changed. No listener
+   * fires goals (flame#60): the page fires them with `track()`, and the
+   * pageview goes out from `trackPageview()`.
    */
   startAutoTracking(): void {
     if (this.clickHandler) {
@@ -160,15 +110,10 @@ export class TrackingManager {
       this.handleClick(event);
     };
 
-    this.submitHandler = (event: SubmitEvent) => {
-      this.handleSubmit(event);
-    };
-
     document.addEventListener('click', this.clickHandler, true);
-    document.addEventListener('submit', this.submitHandler, true);
 
     if (this.debug) {
-      console.log('[Flame] Started auto-tracking clicks and form submissions');
+      console.log('[Flame] Started auto-tracking clicks on changed elements');
     }
   }
 
@@ -184,10 +129,6 @@ export class TrackingManager {
       document.removeEventListener('click', this.clickHandler, true);
       this.clickHandler = null;
     }
-    if (this.submitHandler) {
-      document.removeEventListener('submit', this.submitHandler, true);
-      this.submitHandler = null;
-    }
     if (this.queue) {
       this.queue.stop();
       this.queue.clear();
@@ -202,11 +143,6 @@ export class TrackingManager {
     if (this.clickHandler) {
       document.removeEventListener('click', this.clickHandler, true);
       this.clickHandler = null;
-    }
-
-    if (this.submitHandler) {
-      document.removeEventListener('submit', this.submitHandler, true);
-      this.submitHandler = null;
     }
 
     // Stop the queue (flushes remaining events)
@@ -240,83 +176,6 @@ export class TrackingManager {
       if (selector) {
         this.track('click', { selector, variant_click: true });
       }
-    }
-
-    // Check for goal matches
-    this.checkGoalMatch(target, 'click');
-  }
-
-  /**
-   * Handle a form submit event
-   */
-  private handleSubmit(event: SubmitEvent): void {
-    const target = event.target as Element;
-    if (!target) return;
-
-    // Most built-in submit selectors name the button inside the form
-    // (`.newsletter-form button[type="submit"]`), which is never the form or
-    // one of its ancestors, so also test the button that submitted it (#54).
-    this.checkGoalMatch(target, 'submit', event.submitter ?? undefined);
-  }
-
-  /**
-   * Check if an element matches any registered goals and fire events
-   */
-  private checkGoalMatch(
-    element: Element,
-    eventType: 'click' | 'submit',
-    submitter?: Element
-  ): void {
-    if (this.debug) {
-      console.log(`[Flame] Checking ${this.registeredGoals.length} goals for ${eventType} event`);
-    }
-
-    // Track which goal names we've already fired (dedup)
-    const fired = new Set<string>();
-
-    for (const { goal } of this.registeredGoals) {
-      if (goal.type !== eventType) {
-        continue;
-      }
-
-      // A submit goal with no selector matches any form submit — the
-      // no-code "track any form on the page" case. A click goal with no
-      // selector has no target to bind to (every click would fire it),
-      // so it's only trackable manually via flame.track(); skip it.
-      let matches: boolean;
-      if (goal.selector) {
-        matches =
-          this.elementMatchesGoal(element, goal.selector) ||
-          (submitter !== undefined && this.elementMatchesGoal(submitter, goal.selector));
-      } else {
-        matches = eventType === 'submit';
-      }
-
-      if (this.debug) {
-        console.log(`[Flame] Goal ${goal.name} match:`, matches);
-      }
-
-      if (matches && !fired.has(goal.name)) {
-        this.track(goal.name, {
-          selector: goal.selector,
-          event_type: goal.type,
-        });
-        fired.add(goal.name);
-      }
-    }
-  }
-
-  /**
-   * Check if an element or any of its parents match a selector
-   */
-  private elementMatchesGoal(element: Element, selector: string): boolean {
-    try {
-      if (element.matches(selector)) {
-        return true;
-      }
-      return element.closest(selector) !== null;
-    } catch {
-      return false;
     }
   }
 

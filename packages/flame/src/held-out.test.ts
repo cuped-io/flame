@@ -112,19 +112,17 @@ describe.each<[string, AssignmentResponse]>([
     expect(reveal).toHaveBeenCalledOnce();
   });
 
-  it('attaches no experiment to events but still tracks its goals', async () => {
+  it('attaches no experiment to events', async () => {
     const registerAssignment = vi.spyOn(TrackingManager.prototype, 'registerAssignment');
-    const registerGoals = vi.spyOn(TrackingManager.prototype, 'registerGoals');
     stubApi(response);
 
     const flame = new Flame();
     await flame.init({ dsn: DSN });
 
-    // In no variant, so events carry no assignment for this experiment...
+    // In no variant, so events carry no assignment for this experiment. Its
+    // goals are still the page's track() calls, matched by name, so a
+    // held-out user's conversions reach the Holdout comparison.
     expect(registerAssignment).not.toHaveBeenCalled();
-    // ...but its goals still fire, so a held-out user's conversions reach
-    // the Holdout comparison.
-    expect(registerGoals).toHaveBeenCalledWith('exp-1', experiment.goals);
   });
 
   it('asks again on the next page load instead of caching the refusal', async () => {

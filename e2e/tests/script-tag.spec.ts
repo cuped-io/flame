@@ -82,107 +82,80 @@ test('fires a custom track() event on button click', async ({ page, request }) =
   expect(event?.metadata?.source).toBe('script-tag-example');
 });
 
-// --- goal auto-tracking (cuped-io/ember#171) -------------------------
+// --- goals are the page's track() calls (flame#60, cuped-io/ember#171) ---
 //
 // The mock serves the shared contract payload (`CONTRACT_GOALS` — the
-// byte-identical twin of ember's golden fixture), so these specs assert
-// the half a server-side test can't reach: that a real browser turns
-// that payload into DOM listeners, and that an interaction fires an
-// event *named after the goal*. That name is what the backend matches
-// conversions on, so "no event by that name" and "no conversions, ever"
-// are the same sentence — which is how #171 stayed invisible while both
-// suites were green.
+// byte-identical twin of ember's golden fixture). flame registers no DOM
+// listener for any of it: the example page fires each goal with
+// `flame.track(goal.name)`. That name is what the backend matches
+// conversions on, so these specs assert that each interaction sends exactly
+// one event by that name, carrying the arm, and that nothing else does.
 
-test('auto-tracks a click goal with a custom name and selector', async ({ page, request }) => {
+const GOAL_INTERACTIONS: [string, string][] = [
+  ['cart_add_clicked', '.add-to-cart-cta'],
+  ['checkout_complete', '#checkout-form button[type="submit"]'],
+  ['support_ticket_opened', '#open-ticket'],
+];
+
+for (const [goal, target] of GOAL_INTERACTIONS) {
+  test(`a page's track('${goal}') sends one goal event carrying the arm`, async ({
+    page,
+    request,
+  }) => {
+    await page.goto(PAGE);
+    await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
+
+    await page.locator(target).click();
+    await flushBeacons(page);
+
+    await expect
+      .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
+      .toContain(goal);
+
+    // One, not two: a goal listener on the same selector would add a second.
+    const events = (await getRecordedEvents(request)).filter((e) => e.event_type === goal);
+    expect(events).toHaveLength(1);
+    expect(events[0].experiment_assignments).toContainEqual({
+      experiment_id: 'exp_script_tag',
+      variant_id: 'var_script_treatment',
+    });
+  });
+}
+
+test('a click or submit the page does not track sends no goal event', async ({ page, request }) => {
   await page.goto(PAGE);
   await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
 
+  // Strip the page's own track() calls: what is left is what flame alone does
+  // with a click and a submit on the contract's selectors.
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll('#goal-targets-section [onclick]')) {
+      el.removeAttribute('onclick');
+    }
+    document.getElementById('checkout-form')!.setAttribute('onsubmit', 'return false');
+  });
   await page.locator('.add-to-cart-cta').click();
-  await flushBeacons(page);
-
-  // `cart_add_clicked` deliberately does NOT collide with the SDK's
-  // hardcoded e-commerce auto-goals — under #171 exactly this case was
-  // dead, and a name that did collide masked it.
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('cart_add_clicked');
-
-  const event = (await getRecordedEvents(request)).find((e) => e.event_type === 'cart_add_clicked');
-  expect(event?.metadata?.selector).toBe('.add-to-cart-cta');
-  expect(event?.experiment_assignments).toContainEqual({
-    experiment_id: 'exp_script_tag',
-    variant_id: 'var_script_treatment',
-  });
-});
-
-test('auto-tracks a submit goal on a custom form selector', async ({ page, request }) => {
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-
-  // The reported #171 configuration: primary goal `checkout_complete`,
-  // type submit, selector `#checkout-form`.
   await page.locator('#checkout-form button[type="submit"]').click();
-  await flushBeacons(page);
-
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('checkout_complete');
-
-  const event = (await getRecordedEvents(request)).find(
-    (e) => e.event_type === 'checkout_complete'
-  );
-  expect(event?.metadata?.event_type).toBe('submit');
-  expect(event?.experiment_assignments).toContainEqual({
-    experiment_id: 'exp_script_tag',
-    variant_id: 'var_script_treatment',
-  });
-});
-
-test('auto-tracks a project guardrail goal like any other click goal', async ({
-  page,
-  request,
-}) => {
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-
-  // Guardrails aren't attached to the experiment server-side — they ride
-  // along on the payload, and the SDK can't tell them apart. If they
-  // stopped being served, this is the tracker that dies.
   await page.locator('#open-ticket').click();
-  await flushBeacons(page);
-
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('support_ticket_opened');
-});
-
-test('fires goal events only for interactions matching their selector', async ({
-  page,
-  request,
-}) => {
-  await page.goto(PAGE);
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-
   await page.locator('#untracked-copy').click();
+  await page.evaluate(() =>
+    (window as unknown as { flame: { track(e: string): void } }).flame.track('marker')
+  );
   await flushBeacons(page);
 
-  // Wait for the beacon carrying the pageview before asserting absence:
-  // a goal event fired by the click above would ride the same queue
-  // flush, so once this lands, "not sent" is a real observation rather
-  // than "not sent yet". Reading the sink once raced here under the
-  // full suite.
+  // Wait for an event tracked after the clicks before asserting absence: a
+  // goal event fired by the clicks would be queued ahead of it, so once it
+  // lands, "not sent" is a real observation rather than "not sent yet".
   await expect
     .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toContain('pageview');
+    .toContain('marker');
 
   const types = (await getRecordedEvents(request)).map((e) => e.event_type);
   expect(types).not.toContain('cart_add_clicked');
   expect(types).not.toContain('checkout_complete');
   expect(types).not.toContain('support_ticket_opened');
-  // A pageview goal registers no DOM listener at all — its name is never
-  // an event name (the SDK fires the literal `pageview`, which the
-  // backend matches by url_pattern). This is why pageview goals kept
-  // converting through #171 while click/submit goals didn't.
+  // A pageview goal's name is never an event name: flame fires the literal
+  // `pageview`, which the backend matches by url_pattern.
   expect(types).not.toContain('pricing_viewed');
 });
 
@@ -420,23 +393,4 @@ test('sends no events for a promoted experiment', async ({ page, request }) => {
     .map((e) => (e.metadata as { experiment_id: string }).experiment_id);
   expect(recordedIds).toContain('exp_react');
   expect(recordedIds).not.toContain(PROMOTED_CONTRACT.id);
-});
-
-// flame#54: most built-in submit selectors name the button inside the form, so
-// they only match through the submit event's submitter. A real submit in a real
-// browser, read from what the API actually received.
-test('detects newsletter and search submits by their button (flame#54)', async ({
-  page,
-  request,
-}) => {
-  await page.goto('http://localhost:8789/e2e/fixtures/pages/ecommerce-submit.html');
-  await expect(page.locator('#target-text')).toHaveText('Treatment headline!');
-
-  await page.locator('#newsletter-submit').click();
-  await page.locator('#search-submit').click();
-  await flushBeacons(page);
-
-  await expect
-    .poll(async () => (await getRecordedEvents(request)).map((e) => e.event_type))
-    .toEqual(expect.arrayContaining(['newsletter_signup', 'search']));
 });

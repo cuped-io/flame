@@ -28,13 +28,6 @@ export interface FlameConfig {
   /** Time-to-live in milliseconds for offline events (default: 86400000 = 24 hours) */
   offlineTtlMs?: number;
   /**
-   * Auto-detect e-commerce clicks (add to cart, checkout, …) and track them
-   * as goals. Off by default (flame#38): the selectors are broad, every
-   * match is a billable event, and a non-shop page can match them (an
-   * address form's "add" button). Script tag: `data-ecommerce="true"`.
-   */
-  autoEcommerce?: boolean;
-  /**
    * Wait for the visitor's consent before doing anything (flame#18): no ID,
    * no storage, no network, original page, until `flame.consent(true)`.
    * Script tag: `data-consent="required"`.
@@ -254,20 +247,19 @@ export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed';
 
 /**
  * Goal template / category. The backend matches all variants by event
- * name — this enum is a UI/SDK template hint:
- * - `click` / `submit` — SDK auto-tracker registers a DOM listener for
- *   the goal's `selector` and fires `goal.name` on match.
- * - `pageview` — Backend match additionally filters by `url_pattern`.
- * - `custom` — Developer-fired event (e.g. `useTrack()('vote_cast')`),
- *   no DOM auto-tracking. Use for non-DOM events like form
- *   completions, API responses, or domain actions.
+ * name — this enum is a UI template hint. flame listens to no DOM event for
+ * goals (flame#60):
+ * - `pageview` — Fired by flame on load and SPA navigation. Backend match
+ *   additionally filters by `url_pattern`.
+ * - `click` / `submit` / `custom` — Fired by the page with
+ *   `flame.track(goal.name)` (or `useTrack()`).
  */
 export type GoalType = 'click' | 'submit' | 'pageview' | 'custom';
 
 /**
  * A conversion goal for tracking (matches the cuped API). All goal
- * types are matched by event name on the backend; the variation is in
- * how the event gets fired (SDK auto-tracker vs developer code).
+ * types are matched by event name on the backend; flame fires only the
+ * pageview, and the page fires the rest with `flame.track()`.
  */
 export interface Goal {
   /**
@@ -278,11 +270,8 @@ export interface Goal {
    */
   name: string;
   /**
-   * CSS selector for the SDK auto-tracker on `click`/`submit` goals.
-   * Optional — when missing, the goal is dev-fired by calling
-   * `flame.track(goal.name)` from your code instead of being
-   * auto-tracked from a DOM event. The backend matcher never reads
-   * this field.
+   * CSS selector a `click`/`submit` goal was set up with. Neither flame
+   * (since flame#60) nor the backend matcher reads it.
    */
   selector?: string;
   /** URL pattern to match for pageview goals (e.g., "/product/*", "/checkout/**") */

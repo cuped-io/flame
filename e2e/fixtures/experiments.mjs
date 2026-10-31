@@ -19,8 +19,9 @@ import { fileURLToPath } from 'node:url';
  * where a test asserts the endpoint emits precisely this for a known
  * goal configuration. Here it goes the other way: the mock API serves
  * it, and `tests/script-tag.spec.ts` drives real Chromium interactions
- * against `examples/script-tag/index.html` to prove the SDK turns this
- * payload into fired events.
+ * against `examples/script-tag/index.html` to prove the SDK turns the
+ * page's `track()` calls into events named after these goals, and that it
+ * fires none of them itself (flame#60).
  *
  * Why the pairing exists: cuped-io/ember#171. Goals moved to
  * project-scoped tables server-side, the SDK payload kept serializing a
@@ -33,7 +34,8 @@ import { fileURLToPath } from 'node:url';
  *
  * Read from disk rather than inlined so the twin can be diffed byte for
  * byte. Editing it means editing both copies, and the selectors below
- * must keep matching elements in the script-tag example page.
+ * must keep naming the elements that call `track()` in the script-tag
+ * example page.
  */
 export const CONTRACT_GOALS = JSON.parse(
   readFileSync(
@@ -81,7 +83,7 @@ export const TEST_DSN = `http://${TEST_API_KEY}@localhost:${PORTS.api}`;
  * it would navigate the page away mid-test.)
  *
  * Its `goals` are the shared contract instance — the same JSON cuped
- * emits — so the auto-tracker specs exercise the real payload rather
+ * emits — so the goal specs exercise the real payload rather
  * than a shape invented here. See `CONTRACT_GOALS`.
  */
 export const SCRIPT_TAG_EXPERIMENT = {

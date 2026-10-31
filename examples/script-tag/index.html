@@ -166,25 +166,38 @@
     </section>
 
     <section id="goal-targets-section">
-      <h2>9. goals — auto-tracked clicks and form submits</h2>
+      <h2>9. goals — fired by your own <code>flame.track()</code> calls</h2>
       <p>
-        Goals configured in your dashboard arrive on
-        <code>/experiments/active</code> and flame registers a DOM listener for each
-        <code>click</code> / <code>submit</code> one. When an interaction matches the goal's
-        selector, flame fires an event <em>named after the goal</em> — which is what the backend
-        matches conversions on. (<code>pageview</code> goals need no listener; <code>custom</code>
-        goals are fired by your own <code>flame.track()</code> call.)
+        flame listens to no click or submit for goals. Your page fires an event
+        <em>named after the goal</em> with <code>flame.track(goal.name)</code> — which is what the
+        backend matches conversions on. (<code>pageview</code> goals need nothing: flame sends the
+        pageview itself.)
       </p>
 
-      <form id="checkout-form" onsubmit="return false">
+      <form
+        id="checkout-form"
+        onsubmit="window.flame && window.flame.track('checkout_complete'); return false"
+      >
         <button type="submit">Complete checkout</button>
         <pre>{ "name": "checkout_complete", "type": "submit", "selector": "#checkout-form" }</pre>
       </form>
 
-      <button class="add-to-cart-cta" type="button">Add to cart</button>
+      <button
+        class="add-to-cart-cta"
+        type="button"
+        onclick="window.flame && window.flame.track('cart_add_clicked')"
+      >
+        Add to cart
+      </button>
       <pre>{ "name": "cart_add_clicked", "type": "click", "selector": ".add-to-cart-cta" }</pre>
 
-      <button id="open-ticket" type="button">Open support ticket</button>
+      <button
+        id="open-ticket"
+        type="button"
+        onclick="window.flame && window.flame.track('support_ticket_opened')"
+      >
+        Open support ticket
+      </button>
       <pre>{ "name": "support_ticket_opened", "type": "click", "selector": "#open-ticket" }</pre>
 
       <p id="untracked-copy">

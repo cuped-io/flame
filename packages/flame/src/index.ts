@@ -21,7 +21,6 @@ import {
 import { collectContext } from './context';
 import { applyVariant, rollbackChanges } from './apply';
 import { TrackingManager } from './tracking';
-import { getActiveEcommerceGoals } from './ecommerce';
 import { parseDsn } from './dsn';
 import {
   HYDRATION_POLL_MS,
@@ -271,14 +270,6 @@ class Flame {
         this.log(`Serving ${this.promotedWinners.length} promoted winners`);
       }
 
-      // E-commerce auto-detection is opt-in (flame#38). Registered after the
-      // assignments so the global goals carry them.
-      const ecommerceGoals = this.config?.autoEcommerce ? getActiveEcommerceGoals() : [];
-      if (ecommerceGoals.length > 0) {
-        this.trackingManager.registerGlobalGoals(ecommerceGoals);
-        this.log(`Detected ${ecommerceGoals.length} e-commerce goals on page`);
-      }
-
       // Apply variants when DOM is ready. Nothing tagged with an arm goes out
       // before that arm's record (flame#46), so the buffered events and the
       // pageview wait for the delivery decision: applied, or skipped because
@@ -292,7 +283,7 @@ class Flame {
         this.applyAllVariants(generation);
       }
 
-      // Start auto-tracking (includes event-based ecommerce tracking)
+      // Start auto-tracking (clicks on changed elements; no goals, flame#60)
       this.trackingManager.startAutoTracking();
 
       // Flush events buffered before init ran (#20), then the initial
@@ -337,13 +328,15 @@ class Flame {
   }
 
   /**
-   * Register one experiment's assignment and goals with the tracker.
+   * Note one experiment's arm, to register with the tracker once delivered.
+   * Its goals need nothing here (flame#60): ember matches them by event
+   * name, so the pageview and the page's `track()` calls are all they need.
    *
    * No assignment means the user is in no variant — held out, the
    * workspace is capped or archived, or edge resolution skipped it. That
    * is a normal outcome: the page renders the original and events carry
-   * no assignment for this experiment. Its goals still register, so a
-   * held-out user's conversions reach the Holdout comparison.
+   * no assignment for this experiment, so a held-out user's conversions
+   * still reach the Holdout comparison.
    */
   private registerExperiment(
     experiment: Experiment,
@@ -357,10 +350,6 @@ class Flame {
       this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
     } else {
       this.log(`No variant for experiment ${experiment.id} — rendering original`);
-    }
-
-    if (experiment.goals && experiment.goals.length > 0) {
-      this.trackingManager?.registerGoals(experiment.id, experiment.goals);
     }
   }
 
@@ -667,8 +656,8 @@ class Flame {
     this.userId = this.identity.userId;
 
     // Same tracker, new user (flame#36). Rebuilding it here left the old
-    // one's listeners firing under the device ID, never started the new
-    // one's, and dropped the e-commerce goals.
+    // one's listeners firing under the device ID and never started the new
+    // one's.
     this.trackingManager?.setUserId(this.userId);
 
     // Link the authenticated user to their device ID for CUPED
@@ -807,7 +796,6 @@ function autoInit(): void {
   if (!dsn) return;
 
   const debug = scriptElement.getAttribute('data-debug') === 'true';
-  const autoEcommerce = scriptElement.getAttribute('data-ecommerce') === 'true';
   const requireConsent = scriptElement.getAttribute('data-consent') === 'required';
   const consentApply =
     scriptElement.getAttribute('data-consent-apply') === 'next-page' ? 'next-page' : 'immediate';
@@ -819,7 +807,6 @@ function autoInit(): void {
   flame.init({
     dsn,
     debug,
-    autoEcommerce,
     requireConsent,
     consentApply,
     waitForHydration,
@@ -863,7 +850,6 @@ export { EventQueue, DEFAULT_BATCH_SIZE, DEFAULT_FLUSH_INTERVAL_MS } from './que
 export type { EventQueueConfig } from './queue';
 export type { Identity } from './identity';
 export type { UserContext, DeviceType, ViewportBucket, ConnectionType } from './context';
-export { getEcommerceGoals, getActiveEcommerceGoals } from './ecommerce';
 export { parseDsn } from './dsn';
 export { collectContext, collectMinimalContext } from './context';
 export { hasPrePeriodEligibility } from './identity';

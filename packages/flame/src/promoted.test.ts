@@ -155,7 +155,6 @@ describe('flame.init() with a promoted winner', () => {
 
   it('registers nothing for tracking and reports no variant', async () => {
     const registerAssignment = vi.spyOn(TrackingManager.prototype, 'registerAssignment');
-    const registerGoals = vi.spyOn(TrackingManager.prototype, 'registerGoals');
     stubApi(WINNER);
 
     const flame = newFlame();
@@ -163,7 +162,6 @@ describe('flame.init() with a promoted winner', () => {
 
     // The experiment is concluded: its results are frozen.
     expect(registerAssignment).not.toHaveBeenCalled();
-    expect(registerGoals).not.toHaveBeenCalled();
     expect(flame.getVariant('exp-promoted')).toBeNull();
   });
 

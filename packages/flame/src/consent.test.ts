@@ -129,7 +129,6 @@ describe('consent (flame#18)', () => {
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true });
     flame.track('custom_event');
-    document.getElementById('cta')!.click();
     await settle();
 
     expect(calls).toHaveLength(0);
@@ -187,7 +186,6 @@ describe('consent (flame#18)', () => {
     expect(flame.consent(false)).toBe('denied');
     hideTab();
     flame.track('after_withdrawal');
-    document.getElementById('cta')!.click();
     await settle();
 
     expect(calls.length).toBe(sentBefore);

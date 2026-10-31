@@ -4,7 +4,7 @@ import type { Experiment } from './types';
 
 // flame#36: identify() replaced the TrackingManager without stopping the old
 // one. The old click/submit listeners kept firing under the device ID, the
-// new manager never started auto-tracking, and the e-commerce goals were not
+// new manager never started auto-tracking, and the goals were not
 // re-registered. clearIdentity() had the mirror bug: it never told the
 // tracker, so events after logout still carried the logged-in user's ID.
 
@@ -18,7 +18,7 @@ const experiment: Experiment = {
   status: 'running',
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',
-  goals: [{ name: 'cta_click', type: 'click', selector: '#cta' }],
+  goals: [],
   variants: [],
 };
 
@@ -43,7 +43,8 @@ function stubApi() {
   return sent;
 }
 
-const clicks = (sent: SentEvent[]) => sent.filter((e) => e.event_type === 'cta_click');
+// flame's one listener: clicks on an element a variant changed (flame#63).
+const variantClicks = (sent: SentEvent[]) => sent.filter((e) => e.event_type === 'click');
 
 describe('identity switches keep one tracker (flame#36)', () => {
   // Each test's instance listens on the shared document; stop it after.
@@ -53,20 +54,21 @@ describe('identity switches keep one tracker (flame#36)', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
-    document.body.innerHTML = '<button id="cta">Buy</button>';
+    document.body.innerHTML =
+      '<button id="cta" data-flame-modified="true" data-flame-selector="#cta">Buy</button>';
   });
 
-  it('after identify(), one click is one goal event, under the new user ID', async () => {
+  it('after identify(), one click is one event, under the new user ID', async () => {
     const sent = stubApi();
     flame = new Flame();
     await flame.init({ dsn: DSN, enableBatching: false });
     await flame.identify('user-42');
 
     document.getElementById('cta')!.click();
-    await vi.waitFor(() => expect(clicks(sent).length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(variantClicks(sent).length).toBeGreaterThan(0));
 
-    expect(clicks(sent)).toHaveLength(1);
-    expect(clicks(sent)[0].user_id).toBe('user-42');
+    expect(variantClicks(sent)).toHaveLength(1);
+    expect(variantClicks(sent)[0].user_id).toBe('user-42');
   });
 
   it('after clearIdentity(), events go back to the device ID', async () => {
@@ -77,9 +79,9 @@ describe('identity switches keep one tracker (flame#36)', () => {
     flame.clearIdentity();
 
     document.getElementById('cta')!.click();
-    await vi.waitFor(() => expect(clicks(sent).length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(variantClicks(sent).length).toBeGreaterThan(0));
 
-    expect(clicks(sent)).toHaveLength(1);
-    expect(clicks(sent)[0].user_id).not.toBe('user-42');
+    expect(variantClicks(sent)).toHaveLength(1);
+    expect(variantClicks(sent)[0].user_id).not.toBe('user-42');
   });
 });

@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { TrackingManager } from './tracking';
-import { getEcommerceGoals } from './ecommerce';
 import type { StoredAssignment } from './types';
 import type { ApiClient } from './api';
 
@@ -54,8 +53,9 @@ describe('TrackingManager', () => {
       manager.startAutoTracking();
       manager.startAutoTracking();
 
-      // Should only be called twice (click + submit), not four times
-      expect(addEventListenerSpy).toHaveBeenCalledTimes(2);
+      // One click listener, not two; no submit listener (flame#60)
+      expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
+      expect(addEventListenerSpy).not.toHaveBeenCalledWith('submit', expect.anything(), true);
     });
   });
 
@@ -141,7 +141,7 @@ describe('TrackingManager', () => {
       ]);
     });
 
-    it('should not track clicks on non-modified elements without goals', () => {
+    it('should not track clicks on non-modified elements', () => {
       document.body.innerHTML = `
         <button id="normal">Not modified</button>
       `;
@@ -207,214 +207,6 @@ describe('TrackingManager', () => {
     });
   });
 
-  describe('goal tracking', () => {
-    it('should track click goals as events', () => {
-      document.body.innerHTML = `
-        <button id="add-to-cart" class="add-to-cart-btn">Add to Cart</button>
-      `;
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-      const assignment: StoredAssignment = {
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      };
-      manager.registerAssignment(assignment);
-      manager.registerGoals('exp-1', [
-        { name: 'add_to_cart', selector: '.add-to-cart-btn', type: 'click' },
-      ]);
-      manager.startAutoTracking();
-
-      const button = document.querySelector('#add-to-cart') as HTMLElement;
-      button.click();
-
-      expect(mockApiClient.trackEventsBeacon).toHaveBeenCalledWith([
-        expect.objectContaining({
-          user_id: 'user-123',
-          event_type: 'add_to_cart',
-          metadata: expect.objectContaining({ selector: '.add-to-cart-btn', event_type: 'click' }),
-          experiment_assignments: [{ experiment_id: 'exp-1', variant_id: 'variant-1' }],
-        }),
-      ]);
-    });
-
-    it('should track goals on child elements', () => {
-      document.body.innerHTML = `
-        <button class="checkout-btn">
-          <span class="btn-text">Checkout</span>
-        </button>
-      `;
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-      const assignment: StoredAssignment = {
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      };
-      manager.registerAssignment(assignment);
-      manager.registerGoals('exp-1', [
-        { name: 'checkout', selector: '.checkout-btn', type: 'click' },
-      ]);
-      manager.startAutoTracking();
-
-      const span = document.querySelector('.btn-text') as HTMLElement;
-      span.click();
-
-      expect(mockApiClient.trackEventsBeacon).toHaveBeenCalledWith([
-        expect.objectContaining({
-          user_id: 'user-123',
-          event_type: 'checkout',
-          metadata: expect.objectContaining({ selector: '.checkout-btn', event_type: 'click' }),
-          experiment_assignments: [{ experiment_id: 'exp-1', variant_id: 'variant-1' }],
-        }),
-      ]);
-    });
-
-    it('should deduplicate goals with same name', () => {
-      document.body.innerHTML = `
-        <button class="checkout-btn">Checkout</button>
-      `;
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-
-      // Register same goal for multiple experiments
-      manager.registerAssignment({
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      });
-      manager.registerAssignment({
-        experimentId: 'exp-2',
-        variantId: 'variant-2',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      });
-      manager.registerGoals('exp-1', [
-        { name: 'checkout', selector: '.checkout-btn', type: 'click' },
-      ]);
-      manager.registerGoals('exp-2', [
-        { name: 'checkout', selector: '.checkout-btn', type: 'click' },
-      ]);
-      manager.startAutoTracking();
-
-      const button = document.querySelector('.checkout-btn') as HTMLElement;
-      button.click();
-
-      // Should only fire one event, not two
-      expect(mockApiClient.trackEventsBeacon).toHaveBeenCalledTimes(1);
-    });
-
-    it('should fire a submit goal with no selector on any form submit', () => {
-      document.body.innerHTML = `
-        <form id="contact"><button type="submit">Send</button></form>
-      `;
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-      manager.registerAssignment({
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      });
-      // No selector — the no-code "track any form submit" case.
-      manager.registerGoals('exp-1', [{ name: 'lead_submitted', type: 'submit' }]);
-      manager.startAutoTracking();
-
-      const form = document.querySelector('#contact') as HTMLFormElement;
-      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-
-      expect(mockApiClient.trackEventsBeacon).toHaveBeenCalledWith([
-        expect.objectContaining({
-          user_id: 'user-123',
-          event_type: 'lead_submitted',
-          metadata: expect.objectContaining({ event_type: 'submit' }),
-          experiment_assignments: [{ experiment_id: 'exp-1', variant_id: 'variant-1' }],
-        }),
-      ]);
-    });
-
-    // flame#54: most built-in submit selectors name the button inside the form
-    // (`.newsletter-form button[type="submit"]`). The submit event's target is
-    // the form, so those parts only match through `event.submitter`. Real
-    // submits (button.click()), against the real built-in goal list.
-    it.each([
-      [
-        '<form class="newsletter-form"><button type="submit">Join</button></form>',
-        'newsletter_signup',
-      ],
-      [
-        '<form action="/newsletter"><button type="submit">Join</button></form>',
-        'newsletter_signup',
-      ],
-      [
-        '<form data-action="newsletter"><button type="submit">Join</button></form>',
-        'newsletter_signup',
-      ],
-      ['<form role="search"><button type="submit">Go</button></form>', 'search'],
-      ['<form action="/search"><button type="submit">Go</button></form>', 'search'],
-    ])('fires the built-in submit goal for %s', (html, goalName) => {
-      document.body.innerHTML = html;
-      document.querySelector('form')!.addEventListener('submit', (e) => e.preventDefault());
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-      manager.registerAssignment({
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      });
-      manager.registerGoals('exp-1', getEcommerceGoals());
-      manager.startAutoTracking();
-
-      (document.querySelector('button') as HTMLButtonElement).click();
-
-      expect(mockApiClient.trackEventsBeacon).toHaveBeenCalledWith([
-        expect.objectContaining({ event_type: goalName }),
-      ]);
-    });
-
-    it('does not fire a built-in submit goal for an unrelated form', () => {
-      document.body.innerHTML =
-        '<form action="/contact"><button type="submit">Send</button></form>';
-      document.querySelector('form')!.addEventListener('submit', (e) => e.preventDefault());
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-      manager.registerAssignment({
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      });
-      manager.registerGoals('exp-1', getEcommerceGoals());
-      manager.startAutoTracking();
-
-      (document.querySelector('button') as HTMLButtonElement).click();
-
-      expect(mockApiClient.trackEventsBeacon).not.toHaveBeenCalled();
-    });
-
-    it('should NOT fire a click goal with no selector (clicks need an explicit target)', () => {
-      document.body.innerHTML = `<button id="cta">Buy</button>`;
-
-      const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
-      manager.registerAssignment({
-        experimentId: 'exp-1',
-        variantId: 'variant-1',
-        userId: 'user-123',
-        assignedAt: '2024-01-01T00:00:00Z',
-      });
-      manager.registerGoals('exp-1', [{ name: 'any_click', type: 'click' }]);
-      manager.startAutoTracking();
-
-      (document.querySelector('#cta') as HTMLElement).click();
-
-      expect(mockApiClient.trackEventsBeacon).not.toHaveBeenCalled();
-    });
-  });
-
   describe('debug mode', () => {
     it('should log when debug is enabled', () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -439,7 +231,7 @@ describe('TrackingManager', () => {
       manager.stopAutoTracking();
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        '[Flame] Started auto-tracking clicks and form submissions'
+        '[Flame] Started auto-tracking clicks on changed elements'
       );
       expect(consoleSpy).toHaveBeenCalledWith('[Flame] Stopped auto-tracking');
     });
@@ -710,7 +502,7 @@ describe('TrackingManager', () => {
     });
   });
 
-  describe('track ecommerce events', () => {
+  describe('track named events', () => {
     it('should track add_to_cart event', () => {
       const manager = new TrackingManager(mockApiClient, 'user-123', { enableBatching: false });
 

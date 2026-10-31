@@ -77,9 +77,9 @@ steps on a production target:
    inert element (e.g. a footer link's text or class). Avoid change
    types that could affect a critical user flow on first try.
 2. Load the site and verify the change applied.
-3. Watch the Network tab for events on the existing
-   e-commerce auto-detection (add_to_cart, checkout, etc.) — these
-   should still fire as before.
+3. Watch the Network tab for the pageview and for the events your
+   page fires with `flame.track()` — these should carry the
+   assignment.
 4. Roll the experiment back when you're done.
 
 Caveats for sites with async-rendered DOM (e.g. Shopify themes,

@@ -20,7 +20,7 @@ This repo is a pnpm workspace with three packages:
 1. Fetches active experiments for a project
 2. Assigns visitors to variants
 3. Applies variant changes to the DOM (8 change types: `text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`, `redirect`)
-4. Auto-detects e-commerce events (add to cart, checkout, etc.)
+4. Sends a pageview automatically; your page fires every other goal with `flame.track(goal.name)`
 5. Tracks events with experiment assignments for server-side goal matching
 
 ## Quick start
