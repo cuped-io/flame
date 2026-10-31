@@ -2,3 +2,11 @@ packages:
   - 'packages/*'
   - 'examples/*'
   - 'e2e'
+
+# Patched versions upstream has not adopted yet. Drop each when its parents ship it.
+overrides:
+  # next 15 pins postcss 8.4.31; the fixes are in 8.5.23, which next 16 uses.
+  'next>postcss': ^8.5.23
+  # api-extractor, typescript-estree and @eslint/config-array all pin minimatch 10.x;
+  # the globparts DoS fix is in 11.0.1.
+  'minimatch@10': ^11.0.1
