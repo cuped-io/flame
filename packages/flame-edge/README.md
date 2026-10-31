@@ -77,10 +77,10 @@ import { readPrehydratedForServerComponent } from '@cuped-io/flame-edge/next';
 import { Providers } from './providers';
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const prehydrated = await readPrehydratedForServerComponent(
-    await cookies(),
-    process.env.CUPED_COOKIE_SECRET!,
-  );
+  const prehydrated = await readPrehydratedForServerComponent(await cookies(), {
+    dsn: process.env.CUPED_DSN!,
+    secret: process.env.CUPED_COOKIE_SECRET!,
+  });
   return (
     <html>
       <body>
@@ -105,6 +105,7 @@ const result = await resolveAssignments({
   dsn: process.env.CUPED_DSN!,
   request,                                    // Web standard Request
   secret: process.env.CUPED_COOKIE_SECRET!,
+  waitUntil: (p) => ctx.waitUntil(p),         // your runtime's waitUntil, if it has one
 });
 
 // result.prehydrated → pass to <CupedProvider prehydrated={...}>
@@ -114,21 +115,22 @@ const result = await resolveAssignments({
 To later read the cookie back during render:
 
 ```ts
-const prehydrated = await readPrehydratedFromCookieHeader(
-  request.headers.get('cookie') ?? '',
-  process.env.CUPED_COOKIE_SECRET!,
-);
+const prehydrated = await readPrehydratedFromCookieHeader(request.headers.get('cookie') ?? '', {
+  dsn: process.env.CUPED_DSN!,
+  secret: process.env.CUPED_COOKIE_SECRET!,
+});
 ```
 
 ## What you get
 
-- Cold visit → resolve at edge → sign cookie → render correct variant
-- Nobody counted for a page they never saw: the edge only evaluates (one `/evaluate`, no assignment written), and the browser records each arm when it delivers it
-- Repeat visit → read signed cookie → skip API roundtrip → render correct variant
-- Tampered/expired cookies → reject and re-resolve
-- Network failure → graceful degradation to client-side init
-- Held-out user → render the original, for the life of the cookie
-- Workspace at its event cap or archived → render the original, and ask again (same user) every 10 minutes, so arms come back soon after an upgrade, billing reset or revive. An experiment the API leaves out of its answer is retried the same way.
+- No wait on the cuped API: each runtime keeps a copy of the project's rules file, refreshed in the background about once a minute, and picks arms from it exactly as flame does in the browser
+- New visitor → pick at edge → sign cookie → render correct variant
+- Returning visitor → keeps their arms; a newly started experiment gets an arm and a stopped one drops out within a refresh period
+- Small cookie: only the visitor id and a short token per arm (under 1 KB with 20 experiments)
+- Nobody counted for a page they never saw: the edge writes no assignment, and the browser records each arm when it delivers it
+- No rules copy yet (a fresh runtime) → `prehydrated: null` at once, and the browser picks
+- Tampered/expired cookies → reject and treat as a new visitor
+- Held-out user → render the original
 
 ## Peer dependencies
 

@@ -42,7 +42,7 @@ App boots on <http://localhost:3210>.
 
 | File | Role |
 |---|---|
-| `middleware.ts` | Edge middleware — `createCupedMiddleware` from `@cuped-io/flame-edge/next`. Reads cookie or cold-resolves; writes Set-Cookie. |
+| `middleware.ts` | Edge middleware — `createCupedMiddleware` from `@cuped-io/flame-edge/next`. Picks arms from its rules copy; writes Set-Cookie when they change. |
 | `app/layout.tsx` | Server component — `readPrehydratedForServerComponent` reads the same cookie via `cookies()` and passes the decoded payload to `<Providers>`. |
 | `app/providers.tsx` | Client component — wraps `<CupedProvider>` with the prehydrated prop. Lives in its own file because Server Components can't use context. |
 | `app/page.tsx` | Demo page — exercises `useExperiment`, `<Experiment>`, and `useTrack`. |
@@ -58,19 +58,20 @@ These are the steps to confirm zero-flash SSR is working
 end-to-end. Run them in a private/incognito window so you start
 without a cookie.
 
-### 1. First visit — cold resolution
+### 1. First visit — the edge picks
 
 1. Open <http://localhost:3210> in DevTools' Network tab.
-2. Observe the request to `/` — the response HTML should already
-   contain the assigned variant's text. **View Source** confirms this
-   visually: search for the variant name (`control` or `treatment`)
-   in the raw HTML returned by the server.
-3. The middleware will have made two network calls **server-side**
-   (you won't see them in the browser tab):
-   - `GET <CUPED_DSN host>/{key}/experiments/active`
-   - `POST <CUPED_DSN host>/{key}/experiments/{id}/assign`
-4. Application tab → Cookies → `localhost:3210`. There's a
-   `cuped_state` cookie with a long base64url-encoded value.
+2. Right after the server starts, the first request has no rules copy
+   yet: the middleware answers at once with no arms, the browser picks,
+   and no `cuped_state` cookie is set. Meanwhile the server fetches
+   `GET <CUPED_DSN host>/{key}/rules` in the background (you won't see
+   it in the browser tab).
+3. Open the page in a fresh private window. The response HTML should
+   already contain the assigned variant's text. **View Source**
+   confirms this visually: search for the variant name (`control` or
+   `treatment`) in the raw HTML returned by the server.
+4. Application tab → Cookies → `localhost:3210`. There's a short
+   `cuped_state` cookie (a few hundred bytes).
 
 ### 2. No flash — visual
 
@@ -81,25 +82,26 @@ flicker from gray→colored or from blue→green.
 If you see a flicker:
 - Open the React DevTools "Highlight updates when components render"
   setting. The variant component should NOT re-render on hydration.
-- Check `app/layout.tsx` — `prehydrated` should not be `null` on the
-  second request. If it is, the middleware never set the cookie
-  (likely an env var issue).
+- Check `app/layout.tsx` — `prehydrated` should not be `null` once the
+  server has its rules copy. If it is, check the env vars: the layout
+  needs `CUPED_DSN` as well as the secret.
 
-### 3. Repeat visit — cache
+### 3. Repeat visit — same arms
 
 1. Reload the page.
-2. Network tab — the middleware should NOT fire fresh
-   `/experiments/active` or `/assign` calls. The cookie short-circuits
-   cold resolution.
-3. Page renders correctly, same variant.
+2. The request never waits on the cuped API: the server refreshes its
+   rules copy in the background about once a minute.
+3. Page renders correctly, same variant. Start a new experiment in the
+   dashboard: within about a minute, a reload gives it an arm too. Stop
+   one: it drops out.
 
-### 4. Tampered cookie — re-resolution
+### 4. Tampered cookie — new visitor
 
 1. In DevTools, edit the `cuped_state` cookie value (change one char).
 2. Reload.
-3. Middleware sees the bad signature, treats as missing, re-resolves.
-4. Network tab shows fresh API calls server-side; new cookie set.
-5. Page renders correctly.
+3. Middleware sees the bad signature and treats the request as a new
+   visitor; new cookie set.
+4. Page renders correctly.
 
 ### 5. Expired cookie
 
@@ -108,7 +110,7 @@ the signed payload manually. Decode the part before the `.`:
 
 ```bash
 echo '<base64-from-before-dot>' | base64 -d | jq
-# {"v":1,"iat":...,"exp":...,"state":{...}}
+# {"v":2,"iat":...,"exp":...,"vid":"...","since":...,"arms":["..."]}
 ```
 
 `exp` is unix-seconds-since-epoch. After that timestamp, the cookie
@@ -116,12 +118,11 @@ is rejected.
 
 ### 6. Network failure path
 
-Stop the cuped API (or set `CUPED_DSN` to an unreachable host).
-Reload. Middleware should silently fail; the page should still load
-with `prehydrated=null` and the React provider falls back to its
-v0.1 client-init path. Variant is briefly the control (loading
-state), then re-renders to the assigned variant if any. **The page
-shouldn't break, just degrade.**
+Stop the cuped API (or set `CUPED_DSN` to an unreachable host) and
+restart the server, so it has no rules copy. Reload. The page should
+load at once with `prehydrated=null`, and the browser picks. **The
+page shouldn't break, just degrade.** With the API stopped but the
+server already holding a copy, the edge keeps picking from that copy.
 
 ## What this doesn't cover
 

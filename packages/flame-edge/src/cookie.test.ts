@@ -1,63 +1,63 @@
 import { describe, it, expect } from 'vitest';
 import {
-  signPrehydrated,
-  verifyAndDecode,
+  signVisitor,
+  verifyVisitor,
   buildCookieHeader,
   parseCookieHeader,
   DEFAULT_COOKIE_NAME,
+  type Visitor,
 } from './cookie';
-import type { PrehydratedState } from '@cuped-io/flame';
 
 const SECRET = 'test-secret-please-do-not-use-in-prod';
 
-const sample: PrehydratedState = {
-  user_id: 'user-1',
-  experiments: [],
-  assignments: {},
+const sample: Visitor = {
+  id: 'user-1',
+  since: 1_700_000_000,
+  arms: ['abcdefgh'],
 };
 
 describe('cookie sign/verify', () => {
   it('roundtrips a payload through sign + verify', async () => {
-    const cookie = await signPrehydrated(sample, SECRET);
-    const decoded = await verifyAndDecode(cookie, SECRET);
+    const cookie = await signVisitor(sample, SECRET);
+    const decoded = await verifyVisitor(cookie, SECRET);
     expect(decoded).toEqual(sample);
   });
 
   it('rejects a tampered payload', async () => {
-    const cookie = await signPrehydrated(sample, SECRET);
+    const cookie = await signVisitor(sample, SECRET);
     // Flip a single byte in the payload section.
     const dot = cookie.indexOf('.');
     const bad = cookie.slice(0, dot - 1) + 'X' + cookie.slice(dot);
-    const decoded = await verifyAndDecode(bad, SECRET);
+    const decoded = await verifyVisitor(bad, SECRET);
     expect(decoded).toBeNull();
   });
 
   it('rejects a payload signed with a different secret', async () => {
-    const cookie = await signPrehydrated(sample, SECRET);
-    const decoded = await verifyAndDecode(cookie, 'different-secret');
+    const cookie = await signVisitor(sample, SECRET);
+    const decoded = await verifyVisitor(cookie, 'different-secret');
     expect(decoded).toBeNull();
   });
 
   it('rejects an expired cookie', async () => {
     const tenMinutesAgo = Math.floor(Date.now() / 1000) - 600;
-    const cookie = await signPrehydrated(sample, SECRET, {
+    const cookie = await signVisitor(sample, SECRET, {
       now: tenMinutesAgo,
       ttlSeconds: 60, // expired 9 minutes ago
     });
-    const decoded = await verifyAndDecode(cookie, SECRET);
+    const decoded = await verifyVisitor(cookie, SECRET);
     expect(decoded).toBeNull();
   });
 
   it('rejects a malformed cookie (no dot)', async () => {
-    expect(await verifyAndDecode('no-signature-section', SECRET)).toBeNull();
+    expect(await verifyVisitor('no-signature-section', SECRET)).toBeNull();
   });
 
   it('rejects an empty cookie', async () => {
-    expect(await verifyAndDecode('', SECRET)).toBeNull();
+    expect(await verifyVisitor('', SECRET)).toBeNull();
   });
 
   it('rejects a cookie with non-base64 payload', async () => {
-    expect(await verifyAndDecode('!!!.???', SECRET)).toBeNull();
+    expect(await verifyVisitor('!!!.???', SECRET)).toBeNull();
   });
 });
 

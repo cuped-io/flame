@@ -1,15 +1,17 @@
-import type { PrehydratedState, StoredAssignment } from '@cuped-io/flame';
+import type { Experiment, PrehydratedState, StoredAssignment } from '@cuped-io/flame';
+import { pickArms, type RulesExperiment, type RulesFile } from '@cuped-io/flame/rules';
 import {
-  signPrehydrated,
-  verifyAndDecode,
-  verifyAndDecodePayload,
-  type RetryState,
+  signVisitor,
+  verifyVisitor,
+  variantToken,
+  type Visitor,
   buildCookieHeader,
   parseCookieHeader,
   DEFAULT_COOKIE_NAME,
   DEFAULT_COOKIE_TTL_SECONDS,
 } from './cookie';
-import { evaluateArms, fetchActiveExperiments, parseDsn, type ArmOutcome } from './api';
+import { parseDsn } from './dsn';
+import { cachedRules } from './rules-cache';
 
 export interface ResolveOptions {
   /** Project DSN — the value from your project's Settings → Install Snippet (e.g. `https://YOUR_KEY@api.cuped.io`). */
@@ -27,17 +29,19 @@ export interface ResolveOptions {
   /** Cookie TTL, seconds. Default 30 days. */
   cookieTtlSeconds?: number;
   /**
-   * Timeout for the cuped API roundtrips during cold-resolution.
-   * After this elapses, resolution returns `prehydrated: null` and
-   * the React provider falls back to client-side init. Default 1500ms.
+   * Keeps the runtime alive for the background rules refresh after the
+   * response is sent: pass your runtime's `waitUntil` (Next.js middleware's
+   * `event.waitUntil`, Cloudflare's `ctx.waitUntil`). Without it the refresh
+   * still starts, but a runtime that freezes after the response may not
+   * finish it.
    */
-  timeoutMs?: number;
+  waitUntil?: (promise: Promise<unknown>) => void;
   /**
    * Override `Date.now()`-based time for tests.
    */
   now?: number;
   /**
-   * Override the user_id for cold-resolution. If unset, a UUIDv4 is
+   * Override the user_id for a new visitor. If unset, a UUIDv4 is
    * generated. Useful when the customer already has its own
    * pseudonymous id in another cookie (e.g. an analytics cookie).
    */
@@ -46,9 +50,8 @@ export interface ResolveOptions {
 
 export interface ResolveResult {
   /**
-   * Pre-resolved state. `null` when resolution failed (network error,
-   * timeout) — the caller should still serve the page; the React
-   * provider will fall back to its v0.1 client-side init.
+   * Pre-resolved state. `null` when this runtime has no rules copy yet:
+   * the caller should still serve the page, and the browser picks.
    */
   prehydrated: PrehydratedState | null;
   /**
@@ -65,145 +68,152 @@ function genUserId(): string {
 }
 
 /**
- * How long a declined assignment (event cap, archived workspace) waits
- * before the edge asks again. A cap or an archive lifts on upgrade,
- * billing reset or revive, so it must not stick for the cookie's life.
- */
-const DECLINED_RETRY_SECONDS = 10 * 60;
-
-/**
- * Resolve assignments for the incoming request.
+ * Resolve assignments for the incoming request (flame#62).
  *
- * Behavior:
- * 1. If a valid signed cookie is present, decode and return. If it
- *    lists declined experiments whose retry time has passed, ask
- *    `/evaluate` again for just those (same user), and re-sign.
- * 2. Otherwise, fetch active experiments + evaluate the user, sign a
- *    new cookie, and return both.
- * 3. On network error / timeout / unverifiable cookie, return
- *    `{ prehydrated: null }`. The caller should still serve the
- *    response; client-side init will recover.
+ * Arms are picked here, from this runtime's copy of the project's rules
+ * file, with flame's own pick and Holdout draw. A request never waits on
+ * ember: the copy is refreshed in the background about once a minute.
+ *
+ * - No rules copy yet: `{ prehydrated: null }`, and the cookie is left as it
+ *   is. The browser picks.
+ * - Otherwise the visitor's arms are reconciled with the copy: a new running
+ *   experiment gets an arm, a stopped one drops out, an arm already held
+ *   stays. A new visitor gets an id. The cookie is re-signed when the arms
+ *   changed.
  *
  * Writes no assignment: the page that delivers an arm records it
  * (flame#47), so a visitor is never counted in an experiment they never saw.
  *
- * A held-out user is resolved like an assigned one: the experiment is
- * left out of `assignments`, so the original renders, and it is never
- * asked about again for the cookie's life.
+ * A held-out visitor is left out of `assignments`, so the original renders,
+ * unrecorded.
  */
 export async function resolveAssignments(opts: ResolveOptions): Promise<ResolveResult> {
   const cookieName = opts.cookieName ?? DEFAULT_COOKIE_NAME;
   const ttl = opts.cookieTtlSeconds ?? DEFAULT_COOKIE_TTL_SECONDS;
-  const timeoutMs = opts.timeoutMs ?? 1500;
   const now = opts.now ?? Math.floor(Date.now() / 1000);
 
-  const cookies = parseCookieHeader(opts.request.headers.get('cookie'));
-
-  // 1. Cookie present + valid → return, unless declined ones are due a retry.
-  const existing = cookies[cookieName];
-  const payload = existing ? await verifyAndDecodePayload(existing, opts.secret, { now }) : null;
-  if (payload && (!payload.retry || now < payload.retry.at)) {
-    return { prehydrated: payload.state };
-  }
-  // Otherwise: no cookie, a malformed/expired one (replace it), or a
-  // retry is due.
-
   const { apiKey, apiUrl } = parseDsn(opts.dsn);
+  const rules = cachedRules({ apiUrl, apiKey, nowMs: now * 1000, waitUntil: opts.waitUntil });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchOpts = { apiUrl, apiKey, signal: controller.signal };
+  const existing = parseCookieHeader(opts.request.headers.get('cookie'))[cookieName];
+  const visitor = existing ? await verifyVisitor(existing, opts.secret, { now }) : null;
+  if (!rules) return { prehydrated: null };
 
-  const sign = async (state: PrehydratedState, retryIds: string[]) => {
-    const retry: RetryState | undefined = retryIds.length
-      ? { experiment_ids: retryIds, at: now + DECLINED_RETRY_SECONDS }
-      : undefined;
-    const cookieValue = await signPrehydrated(state, opts.secret, { ttlSeconds: ttl, now, retry });
-    return buildCookieHeader(cookieValue, { name: cookieName, ttlSeconds: ttl });
+  const { state, signed } = await reconcile(
+    rules,
+    visitor ?? { id: opts.userId ?? genUserId(), since: now, arms: [] },
+    now
+  );
+  if (visitor && !visitor.legacy && sameArms(visitor.arms, signed.arms)) {
+    return { prehydrated: state };
+  }
+  const cookieValue = await signVisitor(signed, opts.secret, { ttlSeconds: ttl, now });
+  return {
+    prehydrated: state,
+    setCookie: buildCookieHeader(cookieValue, { name: cookieName, ttlSeconds: ttl }),
   };
-
-  try {
-    if (payload?.retry) {
-      // Evaluate the same user again; only the declined experiments change.
-      const { state, retry } = payload;
-      const pending = retry.experiment_ids.filter((id) =>
-        state.experiments.some((e) => e.id === id)
-      );
-      // A failed evaluation keeps serving the cookie and backs off.
-      const outcomes = await evaluateArms({ ...fetchOpts, userId: state.user_id }).catch(
-        () => new Map<string, ArmOutcome>()
-      );
-      const resolved = partitionOutcomes(pending, outcomes);
-      const next: PrehydratedState = {
-        ...state,
-        assignments: { ...state.assignments, ...resolved.assignments },
-      };
-      return { prehydrated: next, setCookie: await sign(next, resolved.retry) };
-    }
-
-    // 2. Cold resolve: hit the cuped API.
-    const userId = opts.userId ?? genUserId();
-    const userIdCreatedAt = new Date(now * 1000).toISOString();
-
-    const experiments = await fetchActiveExperiments(fetchOpts);
-    const resolved = partitionOutcomes(
-      experiments.map((e) => e.id),
-      experiments.length ? await evaluateArms({ ...fetchOpts, userId }) : new Map()
-    );
-
-    const state: PrehydratedState = {
-      user_id: userId,
-      user_id_created_at: userIdCreatedAt,
-      experiments,
-      assignments: resolved.assignments,
-    };
-    return { prehydrated: state, setCookie: await sign(state, resolved.retry) };
-  } catch {
-    // Timed out or upstream error — let the client recover.
-    return { prehydrated: null };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 /**
- * Split each experiment's `/evaluate` outcome into the cookie's arms and
- * retries. Held-out experiments are left out of `assignments` for good;
- * declined ones, and any ember left out of its answer, are left out too but
- * listed in `retry`, to ask about again later.
+ * The visitor's arms under `rules`, as the state flame#24 accepts and as the
+ * visitor to sign. Each running experiment keeps the arm the visitor has,
+ * else gets flame's pick; experiments no longer running drop out.
  */
-function partitionOutcomes(
-  experimentIds: string[],
-  outcomes: Map<string, ArmOutcome>
-): { assignments: Record<string, StoredAssignment>; retry: string[] } {
-  const assignments: Record<string, StoredAssignment> = {};
-  const retry: string[] = [];
-  for (const experimentId of experimentIds) {
-    const outcome = outcomes.get(experimentId);
-    if (outcome?.kind === 'assigned') {
-      assignments[experimentId] = outcome.assignment;
-    } else if (outcome?.kind !== 'held_out') {
-      retry.push(experimentId);
+async function reconcile(
+  rules: RulesFile,
+  visitor: Visitor,
+  now: number
+): Promise<{ state: PrehydratedState; signed: Visitor }> {
+  const held = new Set(visitor.arms);
+  const assignedAt = new Date(now * 1000).toISOString();
+  const assignment = (experimentId: string, variantId: string): StoredAssignment => ({
+    experimentId,
+    variantId,
+    userId: visitor.id,
+    assignedAt,
+  });
+
+  const saved: Record<string, StoredAssignment> = {};
+  const tokens = new Map<string, string>();
+  for (const experiment of rules.experiments) {
+    const matches: string[] = [];
+    for (const variant of experiment.variants) {
+      const token = await variantToken(variant.id);
+      tokens.set(variant.id, token);
+      if (held.has(token)) matches.push(variant.id);
     }
+    // Two of its variants sharing a token: which one is held is unknown, so
+    // the visitor is picked again.
+    if (matches.length === 1) saved[experiment.id] = assignment(experiment.id, matches[0]);
   }
-  return { assignments, retry };
+
+  // A Holdout member's control is never recorded, so it is left out: flame
+  // shows control, unrecorded. Promoted winners are left out too: flame#24's
+  // edge state has no place for them, as before flame#62.
+  const running = new Set(rules.experiments.map((e) => e.id));
+  const assignments: Record<string, StoredAssignment> = {};
+  const armTokens: string[] = [];
+  for (const arm of await pickArms(rules, visitor.id, saved)) {
+    if (!arm.exposure || !running.has(arm.experimentId)) continue;
+    assignments[arm.experimentId] = assignment(arm.experimentId, arm.variant.id);
+    armTokens.push(tokens.get(arm.variant.id)!);
+  }
+
+  return {
+    state: {
+      user_id: visitor.id,
+      user_id_created_at: new Date(visitor.since * 1000).toISOString(),
+      experiments: rules.experiments.map(toExperiment),
+      assignments,
+    },
+    signed: { ...visitor, arms: armTokens },
+  };
+}
+
+/** A rules-file experiment as flame's edge read takes it. */
+function toExperiment(experiment: RulesExperiment): Experiment {
+  return {
+    id: experiment.id,
+    slug: experiment.slug,
+    url_pattern: experiment.url_pattern,
+    variants: experiment.variants.map((v) => ({ ...v, experiment_id: experiment.id })),
+    // The rules file carries none of these, and flame's read uses none.
+    project_id: '',
+    name: experiment.slug,
+    description: null,
+    status: 'running',
+    created_at: '',
+    updated_at: '',
+  };
+}
+
+function sameArms(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((token) => b.includes(token));
 }
 
 /**
- * Read + verify the signed prehydrated cookie from a `Cookie` header
- * (or a Next.js cookies() iterable).
+ * Read the signed cookie from a `Cookie` header and give the state to pass
+ * to `<CupedProvider prehydrated={...}>`, from this runtime's rules copy.
  *
- * Server components use this when they need to read the same cookie
- * the middleware set, to pass to `<CupedProvider prehydrated={...}>`.
+ * Server components use this to render with the same arms the middleware
+ * signed. `null` with no valid cookie, or no rules copy yet in this runtime.
+ * Never waits on ember.
  */
 export async function readPrehydratedFromCookieHeader(
   cookieHeader: string | null | undefined,
-  secret: string,
-  opts: { cookieName?: string; now?: number } = {}
+  opts: {
+    dsn: string;
+    secret: string;
+    cookieName?: string;
+    now?: number;
+    waitUntil?: (promise: Promise<unknown>) => void;
+  }
 ): Promise<PrehydratedState | null> {
-  const cookieName = opts.cookieName ?? DEFAULT_COOKIE_NAME;
-  const cookies = parseCookieHeader(cookieHeader);
-  const value = cookies[cookieName];
-  if (!value) return null;
-  return verifyAndDecode(value, secret, { now: opts.now });
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const { apiKey, apiUrl } = parseDsn(opts.dsn);
+  const rules = cachedRules({ apiUrl, apiKey, nowMs: now * 1000, waitUntil: opts.waitUntil });
+  const value = parseCookieHeader(cookieHeader)[opts.cookieName ?? DEFAULT_COOKIE_NAME];
+  const visitor = value ? await verifyVisitor(value, opts.secret, { now }) : null;
+  if (!visitor || !rules) return null;
+  return (await reconcile(rules, visitor, now)).state;
 }

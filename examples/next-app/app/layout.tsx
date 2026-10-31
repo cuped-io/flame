@@ -9,13 +9,13 @@ export const metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  // Read the cookie set by middleware. If it's missing or invalid
-  // (first visit, expired, tampered), this returns null and the
-  // provider falls back to client-side init.
-  const prehydrated = await readPrehydratedForServerComponent(
-    await cookies(),
-    process.env.CUPED_COOKIE_SECRET!
-  );
+  // Read the cookie set by middleware (it puts a newly signed one on
+  // this request too). With no valid cookie, or before this runtime has
+  // its rules copy, this returns null and the browser picks.
+  const prehydrated = await readPrehydratedForServerComponent(await cookies(), {
+    dsn: process.env.CUPED_DSN!,
+    secret: process.env.CUPED_COOKIE_SECRET!,
+  });
 
   return (
     <html lang="en">

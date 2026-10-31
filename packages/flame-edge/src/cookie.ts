@@ -1,37 +1,46 @@
 import type { PrehydratedState } from '@cuped-io/flame';
 
 /**
- * Wire shape of the signed cookie payload.
- *
- * `state` is the {@link PrehydratedState} consumed by flame's
- * `init()` and forwarded by the React SDK. The cookie is a
- * base64url-encoded JSON of this object plus a base64url HMAC,
- * separated by a `.`:
+ * Who the visitor is and which arms they have (flame#62). This is all the
+ * cookie holds: the experiments come from the edge's rules copy, so the
+ * cookie stays small however many run.
+ */
+export interface Visitor {
+  /** The id flame picks and records with. */
+  id: string;
+  /** When the id was issued, seconds since epoch (for CUPED eligibility). */
+  since: number;
+  /** One {@link variantToken} per arm the visitor has. */
+  arms: string[];
+}
+
+/**
+ * Wire shape of the signed cookie payload. The cookie is a base64url JSON
+ * of this object plus a base64url HMAC, separated by a `.`:
  *
  *     <base64url(JSON.stringify(payload))>.<base64url(hmac)>
  */
 export interface SignedPayload {
   /** Format version. Bump when the wire shape changes. */
-  v: 1;
+  v: 2;
   /** Issued-at, seconds since epoch. */
   iat: number;
   /** Expires-at, seconds since epoch. */
   exp: number;
-  /** The data flame.init consumes. */
-  state: PrehydratedState;
-  /**
-   * Experiments whose evaluation was declined (event cap, archived
-   * workspace) or left out of ember's answer, to ask about again from
-   * `at` (seconds since epoch). Edge-only: never reaches flame. Absent
-   * when nothing is pending.
-   */
-  retry?: RetryState;
+  /** Visitor id. */
+  vid: string;
+  /** {@link Visitor.since}. */
+  since: number;
+  /** {@link Visitor.arms}. */
+  arms: string[];
 }
 
-/** Experiments to ask `/evaluate` about again, and when. */
-export interface RetryState {
-  experiment_ids: string[];
-  at: number;
+/** The payload flame-edge signed before flame#62. Read once, then re-signed. */
+interface LegacyPayload {
+  v: 1;
+  iat: number;
+  exp: number;
+  state: PrehydratedState;
 }
 
 /** Default cookie name. */
@@ -83,24 +92,37 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * Sign a {@link PrehydratedState} into a cookie value.
+ * A variant's mark in the cookie: the first 8 base64url characters (48 bits)
+ * of SHA-256 of its id. A full id would put 20 arms over 1 KB. Two of a
+ * project's variants sharing a token is vanishingly unlikely, and costs only
+ * a re-pick, which is deterministic and lands on the same arm unless the
+ * weights changed.
+ */
+export async function variantToken(variantId: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(variantId)));
+  return base64UrlEncode(digest).slice(0, 8);
+}
+
+/**
+ * Sign a {@link Visitor} into a cookie value.
  *
  * Returns the string to set as the cookie's value (no encoding
  * concerns — base64url is cookie-safe).
  */
-export async function signPrehydrated(
-  state: PrehydratedState,
+export async function signVisitor(
+  visitor: Visitor,
   secret: string,
-  opts: { ttlSeconds?: number; now?: number; retry?: RetryState } = {}
+  opts: { ttlSeconds?: number; now?: number } = {}
 ): Promise<string> {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const ttl = opts.ttlSeconds ?? DEFAULT_COOKIE_TTL_SECONDS;
   const payload: SignedPayload = {
-    v: 1,
+    v: 2,
     iat: now,
     exp: now + ttl,
-    state,
-    ...(opts.retry ? { retry: opts.retry } : {}),
+    vid: visitor.id,
+    since: visitor.since,
+    arms: visitor.arms,
   };
   const json = encoder.encode(JSON.stringify(payload));
   const key = await importHmacKey(secret, 'sign');
@@ -109,29 +131,20 @@ export async function signPrehydrated(
 }
 
 /**
- * Verify and decode a cookie value into a {@link PrehydratedState}.
+ * Verify and decode a cookie value into a {@link Visitor}.
  *
  * Returns `null` if the cookie is malformed, the signature doesn't
  * match the secret, or the payload has expired. Never throws on
  * tamper — just returns null so the caller treats it as "no cookie."
+ *
+ * A cookie signed before flame#62 keeps its visitor and arms. `legacy`
+ * marks it, so the caller re-signs it in the new shape.
  */
-export async function verifyAndDecode(
+export async function verifyVisitor(
   cookieValue: string,
   secret: string,
   opts: { now?: number } = {}
-): Promise<PrehydratedState | null> {
-  return (await verifyAndDecodePayload(cookieValue, secret, opts))?.state ?? null;
-}
-
-/**
- * Like {@link verifyAndDecode}, but returns the whole signed payload
- * (including edge-only fields such as `retry`).
- */
-export async function verifyAndDecodePayload(
-  cookieValue: string,
-  secret: string,
-  opts: { now?: number } = {}
-): Promise<SignedPayload | null> {
+): Promise<(Visitor & { legacy?: true }) | null> {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const dot = cookieValue.indexOf('.');
   if (dot < 0) return null;
@@ -166,15 +179,32 @@ export async function verifyAndDecodePayload(
   }
   if (!valid) return null;
 
-  let parsed: SignedPayload;
+  let parsed: SignedPayload | LegacyPayload;
   try {
-    parsed = JSON.parse(decoder.decode(payloadBytes)) as SignedPayload;
+    parsed = JSON.parse(decoder.decode(payloadBytes)) as SignedPayload | LegacyPayload;
   } catch {
     return null;
   }
-  if (parsed.v !== 1) return null;
-  if (parsed.exp < now) return null;
-  return parsed;
+  if (typeof parsed?.exp !== 'number' || parsed.exp < now) return null;
+  if (parsed.v === 2) {
+    if (typeof parsed.vid !== 'string' || !Array.isArray(parsed.arms)) return null;
+    const since = typeof parsed.since === 'number' ? parsed.since : parsed.iat;
+    return { id: parsed.vid, since, arms: parsed.arms };
+  }
+  if (parsed.v === 1 && typeof parsed.state?.user_id === 'string') {
+    const { state } = parsed;
+    const created = state.user_id_created_at ? Date.parse(state.user_id_created_at) : NaN;
+    const variantIds = Object.values(state.assignments ?? {})
+      .map((a) => a?.variantId)
+      .filter((id): id is string => typeof id === 'string');
+    return {
+      id: state.user_id,
+      since: Number.isNaN(created) ? parsed.iat : Math.floor(created / 1000),
+      arms: await Promise.all(variantIds.map(variantToken)),
+      legacy: true,
+    };
+  }
+  return null;
 }
 
 /**

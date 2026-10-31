@@ -5,6 +5,11 @@ import dts from 'vite-plugin-dts';
 // ESM + CJS build for npm consumers (e.g. `@cuped-io/flame-react`).
 // Generates `.d.ts` from sources. Companion to `vite.config.ts`
 // which produces the IIFE script-tag build.
+//
+// Two entry points:
+// - index: the SDK
+// - rules: the rules file and its local pick, for flame-edge (flame#62),
+//   which must pick exactly as flame does without the SDK's bundle.
 export default defineConfig({
   plugins: [
     dts({
@@ -15,9 +20,12 @@ export default defineConfig({
   ],
   build: {
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
+      entry: {
+        index: resolve(__dirname, 'src/index.ts'),
+        rules: resolve(__dirname, 'src/rules.ts'),
+      },
       formats: ['es', 'cjs'],
-      fileName: (format) => (format === 'es' ? 'index.mjs' : 'index.cjs'),
+      fileName: (format, entry) => `${entry}.${format === 'es' ? 'mjs' : 'cjs'}`,
     },
     outDir: 'dist',
     emptyOutDir: false,

@@ -1,55 +1,71 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolveAssignments, readPrehydratedFromCookieHeader } from './resolve';
-import { signPrehydrated, DEFAULT_COOKIE_NAME } from './cookie';
-import type { Experiment, PrehydratedState } from '@cuped-io/flame';
+import { DEFAULT_COOKIE_NAME } from './cookie';
+import type { RulesExperiment, RulesFile } from '@cuped-io/flame/rules';
 
 const SECRET = 'test-secret-please-do-not-use';
-const DSN = 'https://0123456789abcdef0123456789abcdef@api.example.com';
+const T0 = 1_700_000_000;
 
-const exp1: Experiment = {
-  id: 'exp-1',
-  project_id: 'proj-1',
-  name: 'Hero',
-  description: null,
-  status: 'running',
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-  goals: [],
-  variants: [
-    {
-      id: 'var-A',
-      experiment_id: 'exp-1',
-      name: 'green',
-      description: null,
-      is_control: false,
-      created_at: '2024-01-01T00:00:00Z',
-      updated_at: '2024-01-01T00:00:00Z',
-    },
-  ],
-};
+let projects = 0;
+/** A DSN for a project no other test used, so each starts with no rules copy. */
+function newDsn(): string {
+  projects += 1;
+  return `https://${projects.toString(16).padStart(32, '0')}@api.example.com`;
+}
 
-/** ember's `/evaluate` answer putting the visitor in exp-1's var-A. */
-const ARM_A = {
-  experiment_id: 'exp-1',
-  variant_id: 'var-A',
-  variant_name: 'green',
-  is_control: false,
-  resolution: 'assigned',
-};
+/** An experiment whose weights send every visitor to `treatment`. */
+function experiment(id: string): RulesExperiment {
+  return {
+    id,
+    slug: `slug-${id}`,
+    url_pattern: null,
+    variants: [
+      { id: `${id}-control`, name: 'control', is_control: true, weight: 0 },
+      { id: `${id}-treatment`, name: 'treatment', is_control: false, weight: 1 },
+    ],
+  };
+}
+
+function rulesFile(experiments: RulesExperiment[], extra: Partial<RulesFile> = {}): RulesFile {
+  return { version: 1, experiments, holdout: null, promoted: [], ...extra };
+}
+
+/** fetch answering GET /rules with whatever `current()` returns. */
+function serveRules(current: () => RulesFile) {
+  const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!url.endsWith('/rules')) throw new Error(`Unexpected fetch: ${url}`);
+    return new Response(JSON.stringify(current()), { status: 200 });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
 
 function makeRequest(headers: Record<string, string> = {}): Request {
   return new Request('https://example.com/', { headers });
 }
 
-function mockFetch(handlers: Array<(url: string, init?: RequestInit) => Response>) {
-  let i = 0;
-  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const handler = handlers[i++];
-    if (!handler) throw new Error(`Unexpected fetch ${i}: ${url}`);
-    return handler(url, init);
-  });
+function cookieFrom(setCookie: string | undefined): string {
+  expect(setCookie).toBeDefined();
+  return setCookie!.split(';')[0];
+}
+
+/** Resolves with background work collected, so a test can let it finish. */
+function resolver(dsn: string) {
+  const background: Promise<unknown>[] = [];
+  const resolve = (opts: { cookie?: string; now?: number; userId?: string } = {}) =>
+    resolveAssignments({
+      dsn,
+      secret: SECRET,
+      request: makeRequest(opts.cookie ? { cookie: opts.cookie } : {}),
+      now: opts.now ?? T0,
+      userId: opts.userId,
+      waitUntil: (p) => background.push(p),
+    });
+  const settle = async () => {
+    await Promise.all(background.splice(0));
+  };
+  return { resolve, settle };
 }
 
 describe('resolveAssignments', () => {
@@ -57,366 +73,324 @@ describe('resolveAssignments', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns the cookie payload when valid', async () => {
-    const state: PrehydratedState = {
-      user_id: 'cached-user',
-      experiments: [exp1],
-      assignments: {
-        'exp-1': {
-          experimentId: 'exp-1',
-          variantId: 'var-A',
-          userId: 'cached-user',
-          assignedAt: '2024-01-01T00:00:00Z',
-        },
-      },
-    };
-    const cookie = await signPrehydrated(state, SECRET);
-    const request = makeRequest({ cookie: `${DEFAULT_COOKIE_NAME}=${cookie}` });
+  it('picks a cookie-less visitor arms from the rules copy, with no call to ember', async () => {
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
 
-    const fetchMock = vi.fn(); // should not be called
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = serveRules(() => rulesFile([experiment('exp-1')]));
+    const result = await edge.resolve({ userId: 'visitor-1', now: T0 + 1 });
 
-    const result = await resolveAssignments({ dsn: DSN, request, secret: SECRET });
-
-    expect(result.prehydrated).toEqual(state);
-    expect(result.setCookie).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('cold-resolves when cookie is missing: one /evaluate, never /assign', async () => {
-    const fetchMock = mockFetch([
-      // GET /experiments/active
-      () =>
-        new Response(JSON.stringify({ experiments: [exp1] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      // POST /evaluate
-      () =>
-        new Response(JSON.stringify({ evaluations: [ARM_A] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-    ]);
-    vi.stubGlobal('fetch', fetchMock);
-
-    const result = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest(),
-      secret: SECRET,
-      userId: 'edge-user-1',
-    });
-
-    // Evaluation writes no assignment: the page that delivers the arm records it.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [url, init] = fetchMock.mock.calls[1];
-    expect(String(url)).toBe('https://api.example.com/0123456789abcdef0123456789abcdef/evaluate');
-    expect(init?.method).toBe('POST');
-    expect(JSON.parse(String(init?.body))).toEqual({ user_id: 'edge-user-1' });
-    expect(result.prehydrated?.user_id).toBe('edge-user-1');
-    expect(result.prehydrated?.experiments).toEqual([exp1]);
-    expect(result.prehydrated?.assignments['exp-1'].variantId).toBe('var-A');
-    expect(result.prehydrated?.assignments['exp-1'].userId).toBe('edge-user-1');
-    expect(result.setCookie).toBeDefined();
-    expect(result.setCookie).toMatch(new RegExp(`^${DEFAULT_COOKIE_NAME}=`));
-  });
-
-  it('cold-resolves when cookie is invalid (tampered)', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch([() => new Response(JSON.stringify({ experiments: [] }), { status: 200 })])
-    );
-    const result = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest({ cookie: `${DEFAULT_COOKIE_NAME}=garbage.signature` }),
-      secret: SECRET,
-    });
-    expect(result.prehydrated?.experiments).toEqual([]);
-    expect(result.setCookie).toBeDefined();
-  });
-
-  it('falls through to client-side init when the cuped API is unreachable', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.reject(new Error('econnrefused')))
-    );
-    const result = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest(),
-      secret: SECRET,
-    });
-    expect(result.prehydrated).toBeNull();
-    expect(result.setCookie).toBeUndefined();
-  });
-
-  it.each([
-    ['fails', () => new Response('boom', { status: 500 })],
-    ['answers with no evaluations list', () => new Response('{}', { status: 200 })],
-  ])('falls through to client-side init when /evaluate %s', async (_case, evaluate) => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch([
-        () => new Response(JSON.stringify({ experiments: [exp1] }), { status: 200 }),
-        evaluate,
-      ])
-    );
-    const result = await resolveAssignments({ dsn: DSN, request: makeRequest(), secret: SECRET });
-    expect(result.prehydrated).toBeNull();
-    expect(result.setCookie).toBeUndefined();
-  });
-
-  it('keeps the arms ember gave when it leaves an experiment out of its answer', async () => {
-    const exp2: Experiment = { ...exp1, id: 'exp-2', name: 'Pricing' };
-    vi.stubGlobal(
-      'fetch',
-      mockFetch([
-        () => new Response(JSON.stringify({ experiments: [exp1, exp2] }), { status: 200 }),
-        () => new Response(JSON.stringify({ evaluations: [ARM_A] }), { status: 200 }),
-      ])
-    );
-
-    const result = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest(),
-      secret: SECRET,
-      userId: 'edge-user-1',
-    });
-
-    // Both experiments listed, but only exp-1 has an assignment.
-    expect(result.prehydrated?.experiments.map((e) => e.id)).toEqual(['exp-1', 'exp-2']);
-    expect(Object.keys(result.prehydrated?.assignments ?? {})).toEqual(['exp-1']);
-  });
-
-  // ember answers with null variant fields when the caller is in no
-  // variant. For these users the original *is* the answer.
-  const NO_VARIANT = {
-    experiment_id: 'exp-1',
-    variant_id: null,
-    variant_name: null,
-    is_control: null,
-  };
-
-  it.each([
-    ['held out', { ...NO_VARIANT, resolution: 'held_out' }],
-    ['cap reached', { ...NO_VARIANT, resolution: 'cap_reached' }],
-    ['workspace archived', { ...NO_VARIANT, resolution: 'workspace_archived' }],
-  ])('resolves %s to the original immediately, with no assignment', async (_arm, answer) => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch([
-        () => new Response(JSON.stringify({ experiments: [exp1] }), { status: 200 }),
-        () => new Response(JSON.stringify({ evaluations: [answer] }), { status: 200 }),
-      ])
-    );
-
-    const started = Date.now();
-    const result = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest(),
-      secret: SECRET,
-      userId: 'edge-user-1',
-      // Far longer than the test may take: resolving must not wait on it.
-      timeoutMs: 60_000,
-    });
-
-    expect(Date.now() - started).toBeLessThan(1_000);
-    // A resolved answer, not the `null` fallback that hands off to the client.
-    expect(result.prehydrated).not.toBeNull();
-    expect(result.prehydrated?.experiments).toEqual([exp1]);
-    expect(result.prehydrated?.assignments).toEqual({});
-    expect(result.setCookie).toBeDefined();
+    expect(result.prehydrated?.user_id).toBe('visitor-1');
+    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('exp-1-treatment');
+    expect(cookieFrom(result.setCookie)).toMatch(new RegExp(`^${DEFAULT_COOKIE_NAME}=`));
   });
 });
 
-describe('resolveAssignments — retrying refusals that can lift', () => {
-  // A cap or an archive lifts (upgrade, billing reset, revive); a Holdout
-  // doesn't. So a capped/archived refusal is asked again after a while,
-  // a held-out one never is.
-  const T0 = 1_700_000_000;
-  const RETRY_AFTER = 10 * 60;
-
-  const REFUSED = {
-    ...ARM_A,
-    variant_id: null,
-    variant_name: null,
-    is_control: null,
-  };
-  const CAPPED = { ...REFUSED, resolution: 'cap_reached' };
-  const HELD_OUT = { ...REFUSED, resolution: 'held_out' };
-
-  const json = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
-  /** An `/evaluate` response carrying these answers. */
-  const evaluated = (...answers: unknown[]) => json({ evaluations: answers });
-
-  function cookieFrom(setCookie: string | undefined): string {
-    expect(setCookie).toBeDefined();
-    return setCookie!.split(';')[0];
-  }
-
-  /** Cold-resolve one user whose `/evaluate` answers are `answers`; return their cookie. */
-  async function coldResolve(...answers: unknown[]): Promise<string> {
-    vi.stubGlobal('fetch', mockFetch([json({ experiments: [exp1] }), evaluated(...answers)]));
-    const result = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest(),
-      secret: SECRET,
-      userId: 'edge-user-1',
-      now: T0,
-    });
-    return cookieFrom(result.setCookie);
-  }
-
-  function resolveWith(cookie: string, now: number) {
-    return resolveAssignments({
-      dsn: DSN,
-      request: makeRequest({ cookie }),
-      secret: SECRET,
-      now,
-    });
-  }
+describe('resolveAssignments — a returning visitor', () => {
+  const REFRESH = 60;
 
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('does not ask again before the retry time', async () => {
-    const cookie = await coldResolve(CAPPED);
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+  /** A project whose ember serves `rules`, with a warm rules copy. */
+  async function warmProject(rules: { current: RulesFile }) {
+    serveRules(() => rules.current);
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
+    return edge;
+  }
 
-    const result = await resolveWith(cookie, T0 + RETRY_AFTER - 1);
+  it('gets a newly started experiment and loses a stopped one within one refresh period', async () => {
+    const rules = { current: rulesFile([experiment('exp-old')]) };
+    const edge = await warmProject(rules);
+    const first = await edge.resolve({ userId: 'visitor-1', now: T0 + 1 });
+    const cookie = cookieFrom(first.setCookie);
+    expect(Object.keys(first.prehydrated!.assignments)).toEqual(['exp-old']);
 
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.prehydrated?.assignments).toEqual({});
-    expect(result.setCookie).toBeUndefined();
+    // ember stops exp-old and starts exp-new.
+    rules.current = rulesFile([experiment('exp-new')]);
+    // The refresh starts in the background on the first request a period on.
+    await edge.resolve({ cookie, now: T0 + REFRESH });
+    await edge.settle();
+    const later = await edge.resolve({ cookie, now: T0 + REFRESH + 1 });
+
+    expect(later.prehydrated?.user_id).toBe('visitor-1');
+    expect(later.prehydrated?.experiments.map((e) => e.id)).toEqual(['exp-new']);
+    expect(Object.keys(later.prehydrated!.assignments)).toEqual(['exp-new']);
+    expect(later.prehydrated?.assignments['exp-new']?.variantId).toBe('exp-new-treatment');
+
+    // The new cookie carries the new arms.
+    const next = await edge.resolve({ cookie: cookieFrom(later.setCookie), now: T0 + REFRESH + 2 });
+    expect(next.setCookie).toBeUndefined();
+    expect(next.prehydrated?.assignments['exp-new']?.variantId).toBe('exp-new-treatment');
   });
 
-  it('evaluates the same user again after the retry time', async () => {
-    const cookie = await coldResolve(CAPPED);
-    const fetchMock = mockFetch([evaluated(ARM_A)]);
-    vi.stubGlobal('fetch', fetchMock);
+  it('serves the old copy, with no wait, until the refresh lands', async () => {
+    const rules = { current: rulesFile([experiment('exp-old')]) };
+    const edge = await warmProject(rules);
+    rules.current = rulesFile([experiment('exp-new')]);
 
-    const result = await resolveWith(cookie, T0 + RETRY_AFTER);
+    const before = await edge.resolve({ userId: 'visitor-1', now: T0 + REFRESH - 1 });
+    expect(before.prehydrated?.experiments.map((e) => e.id)).toEqual(['exp-old']);
+  });
+});
 
-    // One /evaluate, not the active list, and never /assign.
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toMatch(/\/evaluate$/);
-    expect(JSON.parse(String(init?.body))).toEqual({ user_id: 'edge-user-1' });
-
-    expect(result.prehydrated?.user_id).toBe('edge-user-1');
-    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
-
-    // Has an arm now, so the new cookie has nothing left to retry.
-    const later = vi.fn();
-    vi.stubGlobal('fetch', later);
-    await resolveWith(cookieFrom(result.setCookie), T0 + 10 * RETRY_AFTER);
-    expect(later).not.toHaveBeenCalled();
+describe('resolveAssignments — the cookie', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('a retry changes only the experiments it was due for', async () => {
-    const exp2: Experiment = { ...exp1, id: 'exp-2', name: 'Pricing' };
-    vi.stubGlobal(
-      'fetch',
-      mockFetch([
-        json({ experiments: [exp1, exp2] }),
-        evaluated(ARM_A, { ...CAPPED, experiment_id: 'exp-2' }),
-      ])
-    );
-    const cold = await resolveAssignments({
-      dsn: DSN,
-      request: makeRequest(),
-      secret: SECRET,
-      userId: 'edge-user-1',
-      now: T0,
+  it('stays under 1 KB with 20 running experiments', async () => {
+    const experiments = Array.from({ length: 20 }, () => {
+      const id = crypto.randomUUID();
+      return {
+        ...experiment(id),
+        variants: [0, 1].map((i) => ({
+          id: crypto.randomUUID(),
+          name: `variant-${i}`,
+          is_control: i === 0,
+          weight: 1,
+        })),
+      };
+    });
+    serveRules(() => rulesFile(experiments));
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
+
+    const result = await edge.resolve({ now: T0 + 1 });
+
+    expect(Object.keys(result.prehydrated!.assignments)).toHaveLength(20);
+    const cookie = cookieFrom(result.setCookie);
+    expect(new TextEncoder().encode(cookie).length).toBeLessThan(1024);
+  });
+
+  it('keeps the arm a visitor has when the weights change', async () => {
+    const rules = { current: rulesFile([experiment('exp-1')]) };
+    serveRules(() => rules.current);
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
+    const first = await edge.resolve({ userId: 'visitor-1', now: T0 + 1 });
+
+    // Every new visitor now goes to control.
+    const [control, treatment] = experiment('exp-1').variants;
+    rules.current = rulesFile([
+      { ...experiment('exp-1'), variants: [{ ...control, weight: 1 }, { ...treatment, weight: 0 }] },
+    ]);
+    await edge.resolve({ now: T0 + 60 });
+    await edge.settle();
+
+    const returning = await edge.resolve({ cookie: cookieFrom(first.setCookie), now: T0 + 61 });
+    const fresh = await edge.resolve({ userId: 'visitor-2', now: T0 + 61 });
+
+    expect(returning.prehydrated?.assignments['exp-1']?.variantId).toBe('exp-1-treatment');
+    expect(returning.setCookie).toBeUndefined();
+    expect(fresh.prehydrated?.assignments['exp-1']?.variantId).toBe('exp-1-control');
+  });
+
+  it('migrates a cookie signed before flame#62, keeping the visitor and the arm', async () => {
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
+    // A v1 cookie as flame-edge 0.5 signed it: the whole state in the payload.
+    const payload = {
+      v: 1,
+      iat: T0,
+      exp: T0 + 3600,
+      state: {
+        user_id: 'old-visitor',
+        user_id_created_at: '2023-11-14T22:13:20.000Z',
+        experiments: [],
+        assignments: {
+          'exp-1': {
+            experimentId: 'exp-1',
+            variantId: 'exp-1-control',
+            userId: 'old-visitor',
+            assignedAt: '2023-11-14T22:13:20.000Z',
+          },
+        },
+      },
+    };
+    const cookie = `${DEFAULT_COOKIE_NAME}=${await signV1(payload)}`;
+
+    const result = await edge.resolve({ cookie, now: T0 + 1 });
+
+    expect(result.prehydrated?.user_id).toBe('old-visitor');
+    expect(result.prehydrated?.user_id_created_at).toBe('2023-11-14T22:13:20.000Z');
+    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('exp-1-control');
+    // Re-signed in the new shape, which the next request reads unchanged.
+    const next = await edge.resolve({ cookie: cookieFrom(result.setCookie), now: T0 + 2 });
+    expect(next.setCookie).toBeUndefined();
+    expect(next.prehydrated?.assignments['exp-1']?.variantId).toBe('exp-1-control');
+  });
+
+  it('rejects a tampered cookie and treats the request as a new visitor', async () => {
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
+
+    const result = await edge.resolve({
+      cookie: `${DEFAULT_COOKIE_NAME}=garbage.signature`,
+      userId: 'visitor-new',
+      now: T0 + 1,
     });
 
+    expect(result.prehydrated?.user_id).toBe('visitor-new');
+    expect(result.setCookie).toBeDefined();
+  });
+});
+
+describe('resolveAssignments — no rules copy yet', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('answers at once with no arms when ember is unreachable', async () => {
+    // A fetch that never settles: a request that waited on it would hang.
     vi.stubGlobal(
       'fetch',
-      mockFetch([
-        evaluated(
-          { ...ARM_A, variant_id: 'var-B' },
-          { ...ARM_A, experiment_id: 'exp-2', variant_id: 'var-2' }
-        ),
-      ])
+      vi.fn(() => new Promise<Response>(() => {}))
     );
-    const result = await resolveWith(cookieFrom(cold.setCookie), T0 + RETRY_AFTER);
-
-    // The arm the visitor already has stays, so their page does not change.
-    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
-    expect(result.prehydrated?.assignments['exp-2']?.variantId).toBe('var-2');
+    const result = await resolveAssignments({
+      dsn: newDsn(),
+      request: makeRequest(),
+      secret: SECRET,
+    });
+    expect(result).toEqual({ prehydrated: null });
   });
 
-  it('pushes the retry time back when still refused', async () => {
-    const cookie = await coldResolve(CAPPED);
-    vi.stubGlobal('fetch', mockFetch([evaluated(CAPPED)]));
-    const retried = await resolveWith(cookie, T0 + RETRY_AFTER);
-    expect(retried.prehydrated?.assignments).toEqual({});
+  it('keeps the visitor cookie as it is', async () => {
+    const dsn = newDsn();
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    const warm = resolver(dsn);
+    await warm.resolve();
+    await warm.settle();
+    const signed = await warm.resolve({ userId: 'visitor-1', now: T0 + 1 });
 
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    await resolveWith(cookieFrom(retried.setCookie), T0 + 2 * RETRY_AFTER - 1);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('keeps serving the cookie when the retry fails, and backs off', async () => {
-    const cookie = await coldResolve(CAPPED);
+    // Another project's runtime that has no copy: a cookie for it is kept.
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.reject(new Error('econnrefused')))
     );
-
-    const result = await resolveWith(cookie, T0 + RETRY_AFTER);
-
-    expect(result.prehydrated?.user_id).toBe('edge-user-1');
-    expect(result.prehydrated?.experiments).toEqual([exp1]);
-    expect(result.prehydrated?.assignments).toEqual({});
-
-    // With the API down, the next request must not pay another timeout.
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    await resolveWith(cookieFrom(result.setCookie), T0 + 2 * RETRY_AFTER - 1);
-    expect(fetchMock).not.toHaveBeenCalled();
+    const result = await resolver(newDsn()).resolve({ cookie: cookieFrom(signed.setCookie) });
+    expect(result).toEqual({ prehydrated: null });
   });
 
-  it('asks again later when an older cuped API sends no resolution', async () => {
-    const older = { ...ARM_A, resolution: undefined };
-    const cookie = await coldResolve(older);
-    const fetchMock = mockFetch([evaluated(ARM_A)]);
-    vi.stubGlobal('fetch', fetchMock);
+  it('starts using the copy once the background fetch lands', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('econnrefused')))
+    );
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
+    // ember is back; the failed fetch waits one period before the next.
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    expect((await edge.resolve({ now: T0 + 59 })).prehydrated).toBeNull();
+    await edge.resolve({ now: T0 + 60 });
+    await edge.settle();
 
-    const result = await resolveWith(cookie, T0 + RETRY_AFTER);
+    const result = await edge.resolve({ userId: 'visitor-1', now: T0 + 61 });
+    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('exp-1-treatment');
+  });
+});
 
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(result.prehydrated?.assignments['exp-1']?.variantId).toBe('var-A');
+describe('resolveAssignments — the Holdout', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('never asks again for a held-out user', async () => {
-    const cookie = await coldResolve(HELD_OUT);
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+  it('leaves a held-out visitor with no arms, and keeps them out', async () => {
+    const all = { id: 'holdout-1', percentage: 100, active: true };
+    serveRules(() => rulesFile([experiment('exp-1')], { holdout: all }));
+    const edge = resolver(newDsn());
+    await edge.resolve();
+    await edge.settle();
 
-    const result = await resolveWith(cookie, T0 + 100 * RETRY_AFTER);
+    const first = await edge.resolve({ userId: 'visitor-1', now: T0 + 1 });
+    expect(first.prehydrated?.experiments.map((e) => e.id)).toEqual(['exp-1']);
+    expect(first.prehydrated?.assignments).toEqual({});
 
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.prehydrated?.assignments).toEqual({});
+    const again = await edge.resolve({ cookie: cookieFrom(first.setCookie), now: T0 + 2 });
+    expect(again.prehydrated?.user_id).toBe('visitor-1');
+    expect(again.prehydrated?.assignments).toEqual({});
   });
 });
 
 describe('readPrehydratedFromCookieHeader', () => {
-  it('returns null for missing cookie', async () => {
-    expect(await readPrehydratedFromCookieHeader(null, SECRET)).toBeNull();
-    expect(await readPrehydratedFromCookieHeader('other=value', SECRET)).toBeNull();
+  beforeEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('returns the state for a valid cookie', async () => {
-    const state: PrehydratedState = {
-      user_id: 'u',
-      experiments: [],
-      assignments: {},
-    };
-    const cookie = await signPrehydrated(state, SECRET);
-    const header = `${DEFAULT_COOKIE_NAME}=${cookie}`;
-    expect(await readPrehydratedFromCookieHeader(header, SECRET)).toEqual(state);
+  it('gives the state the middleware signed, from the rules copy', async () => {
+    const dsn = newDsn();
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    const edge = resolver(dsn);
+    await edge.resolve();
+    await edge.settle();
+    const signed = await edge.resolve({ userId: 'visitor-1', now: T0 + 1 });
+
+    const fetchMock = serveRules(() => rulesFile([experiment('exp-1')]));
+    const state = await readPrehydratedFromCookieHeader(
+      `other=1; ${cookieFrom(signed.setCookie)}`,
+      { dsn, secret: SECRET, now: T0 + 1 }
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state).toEqual(signed.prehydrated);
+  });
+
+  it('returns null for a missing cookie', async () => {
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    expect(await readPrehydratedFromCookieHeader(null, { dsn: newDsn(), secret: SECRET })).toBeNull();
+    expect(
+      await readPrehydratedFromCookieHeader('other=value', { dsn: newDsn(), secret: SECRET })
+    ).toBeNull();
+  });
+
+  it('returns null, with no wait, when this runtime has no rules copy', async () => {
+    const dsn = newDsn();
+    serveRules(() => rulesFile([experiment('exp-1')]));
+    const edge = resolver(dsn);
+    await edge.resolve();
+    await edge.settle();
+    const signed = await edge.resolve({ userId: 'visitor-1', now: T0 + 1 });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {}))
+    );
+    const state = await readPrehydratedFromCookieHeader(cookieFrom(signed.setCookie), {
+      dsn: newDsn(),
+      secret: SECRET,
+    });
+    expect(state).toBeNull();
   });
 });
+
+/** Sign a payload as flame-edge did before flame#62. */
+async function signV1(payload: unknown): Promise<string> {
+  const b64 = (bytes: Uint8Array) =>
+    btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  const json = new TextEncoder().encode(JSON.stringify(payload));
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, json));
+  return `${b64(json)}.${b64(sig)}`;
+}

@@ -31,7 +31,7 @@ export default defineConfig({
     minify: false,
     sourcemap: true,
     rollupOptions: {
-      external: ['@cuped-io/flame', 'next/server'],
+      external: [/^@cuped-io\/flame(\/.*)?$/, 'next/server'],
       output: {
         exports: 'named',
       },

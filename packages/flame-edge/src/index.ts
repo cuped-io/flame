@@ -12,19 +12,21 @@
  *   dsn: process.env.CUPED_DSN!,
  *   request,
  *   secret: process.env.CUPED_COOKIE_SECRET!,
+ *   waitUntil: (p) => ctx.waitUntil(p),
  * });
  * ```
  */
 
 export {
-  signPrehydrated,
-  verifyAndDecode,
+  signVisitor,
+  verifyVisitor,
+  variantToken,
   buildCookieHeader,
   parseCookieHeader,
   DEFAULT_COOKIE_NAME,
   DEFAULT_COOKIE_TTL_SECONDS,
   type SignedPayload,
-  type RetryState,
+  type Visitor,
 } from './cookie';
 
 export {

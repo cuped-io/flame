@@ -16,7 +16,7 @@ The SSR path renders flash-free. On the script-tag path flame changes
 nothing, so there is nothing to flash.
 
 The mock serves the rules file (`fixtures/experiments.mjs` `RULES`) to
-flame and `/evaluate` to flame-edge, as ember does, and its `/events`
+flame and flame-edge, as ember does, and its `/events`
 refuses a whole envelope over one malformed `$assignment`, as ember does,
 so a bad record fails the suite instead of being accepted.
 
