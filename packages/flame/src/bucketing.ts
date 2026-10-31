@@ -5,14 +5,17 @@
  * ⚠️ This MUST produce bit-identical assignments to the server. If the client
  * and server ever disagree, a visitor sees variant A while the server
  * attributes B — silently corrupting experiment data, the one thing an A/B
- * product must get right. The port is pinned to ember's golden vectors
- * (`bucketing.test.ts`); the algorithm is a FROZEN SHARED CONTRACT (flame#24)
- * — if either side changes it, both golden-vector suites move in lockstep.
+ * product must get right. The port is pinned to ember's golden vectors and
+ * its contract fixture (`bucketing.test.ts`,
+ * `contracts/sticky-bucket-vectors.contract.json`); the algorithm is a FROZEN
+ * SHARED CONTRACT with ember (flame#24, ember#309) — if either side changes
+ * it, both golden-vector suites move in lockstep.
  *
  * Algorithm:
  *   1. `stickyBucket(user, exp, n)` = `SHA256("{user}:{exp}")[0..8]` as a
- *      big-endian u64, modulo `n`.
- *   2. `select`: sort variants by id ascending; `total = Σ max(0, weight)`;
+ *      big-endian u64, modulo `n`. `exp` is lowercased, as ember's `Uuid`
+ *      formats it.
+ *   2. `select`: sort variants by lowercase id ascending; `total = Σ max(0, weight)`;
  *      `bucket = stickyBucket(user, exp, total)`; walk sorted variants
  *      accumulating weight and return the first whose cumulative range
  *      `[prev, prev+weight)` contains the bucket.
@@ -25,14 +28,16 @@ export interface WeightedVariant {
 
 /**
  * `SHA256("{userId}:{experimentId}")`, first 8 bytes as a big-endian u64,
- * modulo `numBuckets`. Mirrors ember's `sticky_bucket` exactly.
+ * modulo `numBuckets`. Mirrors ember's `sticky_bucket` exactly. The id is
+ * lowercased: ember hashes its `Uuid`'s lowercase form, whatever casing it
+ * was given.
  */
 export async function stickyBucket(
   userId: string,
   experimentId: string,
   numBuckets: number
 ): Promise<number> {
-  const input = new TextEncoder().encode(`${userId}:${experimentId}`);
+  const input = new TextEncoder().encode(`${userId}:${experimentId.toLowerCase()}`);
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
   // First 8 bytes, big-endian (matches Rust `u64::from_be_bytes(digest[..8])`).
   const hash = new DataView(digest.buffer, digest.byteOffset, 8).getBigUint64(0, false);
@@ -49,10 +54,14 @@ export async function selectVariantDeterministically<T extends WeightedVariant>(
   experimentId: string,
   variants: readonly T[]
 ): Promise<T | null> {
-  // Sort by id ascending — UUID string order equals ember's `Uuid` byte order,
-  // so this matches the server's `sort_by_id` step (which the CDF walk depends
-  // on: the cumulative segments are assigned in this order).
-  const sorted = [...variants].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // Sort by id ascending — lowercase UUID string order equals ember's `Uuid`
+  // byte order, so this matches the server's `sort_by_id` step (which the CDF
+  // walk depends on: the cumulative segments are assigned in this order). Raw
+  // mixed-case order would not: 'B' (0x42) sorts before 'a' (0x61).
+  const sorted = variants
+    .map((v) => ({ key: v.id.toLowerCase(), v }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .map(({ v }) => v);
 
   const totalWeight = sorted.reduce((sum, v) => sum + Math.max(0, v.weight), 0);
   if (totalWeight === 0) return null;

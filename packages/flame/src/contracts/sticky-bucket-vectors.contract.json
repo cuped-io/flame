@@ -1,0 +1,172 @@
+{
+  "about": [
+    "Golden vectors for picking a new visitor's arm from the rules file (ember#309).",
+    "bucket = big-endian u64 of the first 8 bytes of sha256(\"{user_id}:{experiment_id}\") modulo total_weight.",
+    "Sort variants by id (lowercase UUID string order), clamp each weight below 0 to 0, sum to total_weight.",
+    "The arm is the first variant whose cumulative weight exceeds bucket. total_weight 0 picks no arm: bucket and variant_id are null, and the client shows control.",
+    "Pinned in ember by select_variant_deterministically (domain/services/sdk.rs)."
+  ],
+  "vectors": [
+    {
+      "user_id": "user-1",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 3
+        },
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 1
+        }
+      ],
+      "total_weight": 4,
+      "bucket": 2,
+      "variant_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "user_id": "user-1",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 1
+        },
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 1
+        }
+      ],
+      "total_weight": 2,
+      "bucket": 0,
+      "variant_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "user_id": "user-2",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 1
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 1
+        },
+        {
+          "id": "33333333-3333-3333-3333-333333333333",
+          "weight": 1
+        }
+      ],
+      "total_weight": 3,
+      "bucket": 1,
+      "variant_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "user_id": "alice@example.com",
+      "experiment_id": "00000000-0000-0000-0000-000000000000",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 1
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 1
+        },
+        {
+          "id": "33333333-3333-3333-3333-333333333333",
+          "weight": 2
+        }
+      ],
+      "total_weight": 4,
+      "bucket": 0,
+      "variant_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "user_id": "",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 50
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 50
+        }
+      ],
+      "total_weight": 100,
+      "bucket": 0,
+      "variant_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "user_id": "d_abc123",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 90
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 10
+        }
+      ],
+      "total_weight": 100,
+      "bucket": 87,
+      "variant_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "user_id": "user-3",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 0
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 1
+        }
+      ],
+      "total_weight": 1,
+      "bucket": 0,
+      "variant_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "user_id": "user-4",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 1
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": -2
+        }
+      ],
+      "total_weight": 1,
+      "bucket": 0,
+      "variant_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "user_id": "user-5",
+      "experiment_id": "550e8400-e29b-41d4-a716-446655440001",
+      "variants": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "weight": 0
+        },
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "weight": 0
+        }
+      ],
+      "total_weight": 0,
+      "bucket": null,
+      "variant_id": null
+    }
+  ]
+}

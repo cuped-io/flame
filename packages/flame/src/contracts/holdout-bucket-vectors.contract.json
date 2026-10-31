@@ -1,0 +1,88 @@
+{
+  "about": [
+    "Golden vectors for the Holdout draw from the rules file (ember#309, ADR 0024).",
+    "bucket = big-endian u64 of the first 8 bytes of sha256(\"{user_id}:{holdout_id}\") modulo 10000.",
+    "threshold = round(percentage * 100), clamped to [0, 10000]. held_out is bucket < threshold.",
+    "Only for a visitor with no stored Holdout arm: the record step's stored arm always wins.",
+    "Pinned in ember by draw_arm (domain/services/holdout_admission.rs)."
+  ],
+  "vectors": [
+    {
+      "user_id": "user_1",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 5.0,
+      "bucket": 2921,
+      "held_out": false
+    },
+    {
+      "user_id": "user_2",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 57.0,
+      "bucket": 5700,
+      "held_out": false
+    },
+    {
+      "user_id": "user_2",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 57.01,
+      "bucket": 5700,
+      "held_out": true
+    },
+    {
+      "user_id": "user_1",
+      "holdout_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "percentage": 8.36,
+      "bucket": 836,
+      "held_out": false
+    },
+    {
+      "user_id": "user_1",
+      "holdout_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "percentage": 8.37,
+      "bucket": 836,
+      "held_out": true
+    },
+    {
+      "user_id": "",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 61.37,
+      "bucket": 6137,
+      "held_out": false
+    },
+    {
+      "user_id": "",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 61.38,
+      "bucket": 6137,
+      "held_out": true
+    },
+    {
+      "user_id": "d_abc123",
+      "holdout_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "percentage": 25.4,
+      "bucket": 2540,
+      "held_out": false
+    },
+    {
+      "user_id": "d_abc123",
+      "holdout_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "percentage": 25.41,
+      "bucket": 2540,
+      "held_out": true
+    },
+    {
+      "user_id": "user_1",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 0.0,
+      "bucket": 2921,
+      "held_out": false
+    },
+    {
+      "user_id": "user_1",
+      "holdout_id": "550e8400-e29b-41d4-a716-446655440000",
+      "percentage": 100.0,
+      "bucket": 2921,
+      "held_out": true
+    }
+  ]
+}
