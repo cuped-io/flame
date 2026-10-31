@@ -1,14 +1,9 @@
 import type {
-  ActiveExperimentsResponse,
-  CreateAssignmentRequest,
   CreateEventBatchRequest,
   CreateEventRequest,
   CreateIdentityLinkRequest,
-  EvaluateResponse,
   IdentityLinkResponse,
-  IdentityMetadata,
 } from './types';
-import type { UserContext } from './context';
 
 /**
  * What became of a batch sent with {@link ApiClient.sendEvents}.
@@ -66,13 +61,11 @@ export class ApiClient {
     const url = `${this.apiUrl}${fullPath}`;
     this.log(`${method} ${url}`, body);
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
+    // A GET sends no Content-Type, so the browser asks no CORS preflight and
+    // the rules file costs one request.
     const response = await fetch(url, {
       method,
-      headers,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
 
@@ -93,31 +86,14 @@ export class ApiClient {
   }
 
   /**
-   * Fetch active experiments for the project
+   * The project's rules file (ember#309): the same for every visitor, and
+   * cached at the edge for about a minute. Returned unparsed: the caller
+   * checks its version.
    *
-   * GET /{api_key}/experiments/active
+   * GET /{api_key}/rules
    */
-  async getActiveExperiments(): Promise<ActiveExperimentsResponse> {
-    return this.request<ActiveExperimentsResponse>('GET', '/experiments/active');
-  }
-
-  /**
-   * POST /{api_key}/evaluate
-   *
-   * The arm, or held-out, for every active experiment, in one request.
-   * Nothing is enrolled: flame records an arm when it delivers it (flame#46).
-   */
-  async evaluate(
-    userId: string,
-    context?: UserContext,
-    identity?: IdentityMetadata
-  ): Promise<EvaluateResponse> {
-    const payload: CreateAssignmentRequest = {
-      user_id: userId,
-      context: context as unknown as Record<string, unknown>,
-      identity,
-    };
-    return this.request<EvaluateResponse>('POST', '/evaluate', payload);
+  async getRules(): Promise<unknown> {
+    return this.request<unknown>('GET', '/rules');
   }
 
   /**

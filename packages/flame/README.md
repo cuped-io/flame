@@ -5,7 +5,7 @@
 
 Client-side A/B testing SDK for [cuped.io](https://cuped.io).
 
-Drop a `<script>` tag on your page and define variants in the cuped.io dashboard, or import the SDK and drive variants from your own code.
+Drop a `<script>` tag on your page or import the SDK, then read each visitor's variant from your own code.
 
 ## Install
 
@@ -21,7 +21,7 @@ You'll need a DSN — get one at [cuped.io](https://cuped.io) under **Settings �
 
 ## Usage
 
-### Script tag (no-code DOM mutations)
+### Script tag
 
 Pin to a version and guard it with [Subresource Integrity](https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity) — `crossorigin` is required for SRI on the cross-origin script:
 
@@ -34,7 +34,17 @@ Pin to a version and guard it with [Subresource Integrity](https://developer.moz
 ></script>
 ```
 
-The SDK auto-initializes from the `data-dsn` attribute, fetches active experiments, applies variant DOM changes, and tracks events. Define the changes per variant in the cuped.io dashboard.
+The SDK auto-initializes from the `data-dsn` attribute, picks the visitor's variants from your project's rules file, and tracks events. It never changes or hides the page: your code reads the variant and renders it.
+
+```html
+<script>
+  window.addEventListener('flame:ready', () => {
+    if (flame.getVariant('hero-cta') === 'VARIANT_ID') {
+      // render the treatment
+    }
+  });
+</script>
+```
 
 The SRI hash for every published version is listed in [`cdn.cuped.io/flame.sri.json`](https://cdn.cuped.io/flame.sri.json) (a `versions` map plus a `latest` pointer). Pinned `flame@X.Y.Z.js` URLs are write-once and never removed, so a pin keeps resolving byte-for-byte across all later releases and can always be rolled back to. The unversioned `https://cdn.cuped.io/flame.js` is a floating "latest" that always serves the newest release — convenient, but it can't be SRI-pinned (its bytes change on every release) and gives up rollback safety.
 
@@ -45,7 +55,7 @@ import { flame } from '@cuped-io/flame';
 
 await flame.init({ dsn: 'https://YOUR_KEY@api.cuped.io' });
 
-if (flame.isInVariant('hero-cta', 'treatment')) {
+if (flame.isInVariant('hero-cta', 'Treatment')) {
   // ...
 }
 
@@ -55,6 +65,13 @@ if (flame.isInVariant('hero-cta', 'treatment')) {
 flame.track('vote_cast', { game_id: 'g42', option: 'controller' });
 ```
 
+### How flame picks and records a variant
+
+- **Picking.** flame fetches your project's rules file (`GET /{api_key}/rules`, cached at the edge for about a minute) and picks each new visitor's variant on the device, with the same hash cuped's server uses. It keeps a copy, so a returning visitor's variants are known before any request; the copy is refreshed in the background. A visitor in the project's Holdout gets control, and a promoted winner is served to everyone else. A `prehydrated` answer from `@cuped-io/flame-edge` is used as is.
+- **Ready.** `flame.ready` is a promise that resolves once reads answer, and flame dispatches a `flame:ready` event on `window` at the same moment (again when a consent grant starts flame). Wait on either instead of polling `isInitialized()`. If the rules file cannot be fetched and there is no stored copy, flame is still ready and every read answers control.
+- **Exposure on read.** A visitor is counted in an experiment only when your code reads it: the first `getVariant`, `getAssignedVariantInfo` or `isInVariant` call for that experiment records a `$assignment` with the page path, once per visitor and variant. An experiment your page never reads is never recorded. A read before flame is ready returns `null` (show control) and records nothing. Control given to a Holdout member, a promoted winner, and control on a page outside the experiment's URL pattern are never recorded.
+- **Events.** The pageview goes out as soon as flame starts. `track()` events carry only the variants recorded so far, including those recorded on earlier visits.
+
 The SDK POSTs every event to `POST /{api_key}/events` as the array
 envelope `{ "events": [ … ] }` (a single event is an array of one).
 
@@ -63,6 +80,7 @@ envelope `{ "events": [ … ] }` (a single event is an array of one).
 ```ts
 // Lifecycle
 flame.init({ dsn, prehydrated? })
+flame.ready            // Promise<void>; also the 'flame:ready' event on window
 
 // Events — one verb. Use track('pageview') on SPA navigation and
 // track('conversion', …) for conversions.
@@ -74,21 +92,17 @@ flame.clearIdentity()
 flame.getUserId()
 flame.getIdentity()
 
-// Experiments
-flame.getVariant(experimentId)
-flame.getAssignedVariantInfo(experimentId)
-flame.isInVariant(experimentId, variantOrName)
+// Experiments: key is the experiment's slug or id. A read records exposure.
+flame.getVariant(key)                 // variant id, or null: show control
+flame.getAssignedVariantInfo(key)     // { id, name, is_control, ... } or null
+flame.isInVariant(key, variantIdOrName)
 flame.isInitialized()
 flame.reset()
 ```
 
-## Variant change types
-
-When using the script-tag flow, variants can apply 8 change types to the DOM via CSS selectors: `text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`, `redirect`. Configured in the cuped.io dashboard.
-
 ## Page targeting
 
-An experiment can set a URL pattern in the cuped.io dashboard, using the same syntax as goals: `/pricing`, `/product/*` (one segment), `/checkout/**` (the path and anything beneath it), or `**/confirmation` (any path ending in it). flame assigns, counts and changes a visitor only on a page whose path matches. On other pages the experiment is skipped, but a visitor already counted keeps their variant on their events, so a conversion on another page is still attributed. Single-page apps are re-checked when the URL changes through `history.pushState`, `history.replaceState` or back/forward: leaving the matching pages undoes the change on whatever stays on screen. An experiment with no pattern runs on every page. Promoted winners are not targeted yet.
+An experiment can set a URL pattern in the cuped.io dashboard, using the same syntax as goals: `/pricing`, `/product/*` (one segment), `/checkout/**` (the path and anything beneath it), or `**/confirmation` (any path ending in it). A read on a page whose path does not match returns control and records nothing, unless the visitor was already recorded in that experiment, so a conversion on another page is still attributed. An experiment with no pattern runs on every page.
 
 ## Documentation
 

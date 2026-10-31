@@ -17,9 +17,9 @@ This repo is a pnpm workspace with three packages:
 
 ## What it does
 
-1. Fetches active experiments for a project
-2. Assigns visitors to variants
-3. Applies variant changes to the DOM (8 change types: `text`, `html`, `attribute`, `class`, `style`, `css`, `visibility`, `redirect`)
+1. Fetches the project's rules file, cached at the edge, and keeps a copy
+2. Picks each visitor's variants on the device, with the same hash as cuped's server; your code reads them with `getVariant` or `useExperiment`
+3. Records a visitor in an experiment only when your code reads it; flame never changes or hides the page
 4. Sends a pageview automatically; your page fires every other goal with `flame.track(goal.name)`
 5. Tracks events with experiment assignments for server-side goal matching
 

@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
-import type { Experiment } from './types';
-import { evaluateBody } from './test-evaluation';
+import type { RulesFile } from './rules';
 
 // flame#60: flame no longer listens to clicks and submits for goals, and
 // e-commerce auto-detection is gone. A goal's event is fired by the page, with
@@ -9,33 +8,19 @@ import { evaluateBody } from './test-evaluation';
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
 
-const experiment: Experiment = {
-  id: 'exp-1',
-  project_id: 'proj-1',
-  name: 'CTA',
-  description: null,
-  status: 'running',
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-  goals: [
-    { name: 'cta_click', type: 'click', selector: '#cta' },
-    { name: 'signup', type: 'submit', selector: '#signup' },
-    { name: 'any_form', type: 'submit' },
-    { name: 'checkout_view', type: 'pageview', url_pattern: '/checkout' },
-    { name: 'vote_cast', type: 'custom' },
-  ],
-  variants: [
+// One arm with all the weight, so every visitor's pick is variant-A.
+const rules: RulesFile = {
+  version: 1,
+  experiments: [
     {
-      id: 'variant-A',
-      experiment_id: 'exp-1',
-      name: 'green',
-      description: null,
-      is_control: false,
-      created_at: '2024-01-01T00:00:00Z',
-      updated_at: '2024-01-01T00:00:00Z',
-      changes: [],
+      id: 'exp-1',
+      slug: 'cta',
+      url_pattern: null,
+      variants: [{ id: 'variant-A', name: 'green', is_control: false, weight: 1 }],
     },
   ],
+  holdout: null,
+  promoted: [],
 };
 
 type SentEvent = {
@@ -49,22 +34,8 @@ function stubApi() {
     'fetch',
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url.endsWith('/experiments/active')) {
-        return new Response(JSON.stringify({ experiments: [experiment] }), { status: 200 });
-      }
-      if (url.endsWith('/evaluate')) {
-        return new Response(
-          evaluateBody({
-            assignment_id: null,
-            experiment_id: 'exp-1',
-            variant_id: 'variant-A',
-            variant_name: 'green',
-            is_control: false,
-            assigned_at: null,
-            resolution: 'assigned',
-          }),
-          { status: 200 }
-        );
+      if (url.endsWith('/rules')) {
+        return new Response(JSON.stringify(rules), { status: 200 });
       }
       if (url.includes('/events') && init?.body) {
         const body = JSON.parse(String(init.body));
@@ -122,16 +93,18 @@ describe('goals are fired by the page, not by DOM listeners (flame#60)', () => {
     expect(types(sent.slice(before))).toEqual(['marker']);
   });
 
-  it('the initial pageview and track() still go out, carrying the recorded arm', async () => {
+  it('the initial pageview and track() still go out, track() carrying the arm the page read', async () => {
     const sent = stubApi();
     flame = new Flame();
     await flame.init({ dsn: DSN, enableBatching: false });
+    flame.getVariant('cta');
     flame.track('cta_click', { source: 'hero' });
     await vi.waitFor(() => expect(types(sent)).toContain('cta_click'));
 
     const pageview = sent.find((e) => e.event_type === 'pageview');
     const goal = sent.find((e) => e.event_type === 'cta_click');
-    expect(pageview?.experiment_assignments).toEqual(ARM);
+    // Sent at once, before any read: no arm yet (flame#24).
+    expect(pageview?.experiment_assignments).toBeUndefined();
     expect(goal?.experiment_assignments).toEqual(ARM);
   });
 });

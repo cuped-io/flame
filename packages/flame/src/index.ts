@@ -1,13 +1,13 @@
-import type { FlameConfig, Experiment, StoredAssignment, IdentityMetadata, Variant } from './types';
+import type {
+  FlameConfig,
+  IdentityMetadata,
+  PrehydratedState,
+  StoredAssignment,
+  Variant,
+} from './types';
 import type { UserContext } from './context';
 import { ApiClient } from './api';
-import {
-  resolveAssignments,
-  getAssignedVariant,
-  clearStoredAssignments,
-  recordedArms,
-  markRecorded,
-} from './assignment';
+import { savedArms, clearStoredAssignments, recordedArms, markRecorded } from './assignment';
 import {
   getIdentity,
   identify as identifyUser,
@@ -19,18 +19,18 @@ import {
   type Identity,
 } from './identity';
 import { collectContext } from './context';
-import { applyVariant, rollbackChanges } from './apply';
 import { TrackingManager } from './tracking';
 import { parseDsn } from './dsn';
-import {
-  HYDRATION_POLL_MS,
-  HYDRATION_TIMEOUT_MS,
-  reactSsrDetected,
-  targetsHydrated,
-} from './hydration';
-import { watchForFreshTargets } from './reapply';
 import { runsOnThisPage } from './url-pattern';
-import { watchPathChanges } from './navigation';
+import {
+  pickArms,
+  parseRules,
+  loadStoredRules,
+  storeRules,
+  clearStoredRules,
+  type Arm,
+  type RulesFile,
+} from './rules';
 import {
   initialConsentState,
   consentAllowsRunning,
@@ -45,47 +45,82 @@ export type { ConsentState };
 declare const __VERSION__: string;
 
 /**
+ * Dispatched on `window` each time flame's reads start answering: when init
+ * completes, and again when a consent grant starts flame (flame#24).
+ */
+export const READY_EVENT = 'flame:ready';
+
+/** The arms a flame-edge answer gives, and control for what it left out. */
+function edgeArms(prehydrated: PrehydratedState): Arm[] {
+  return prehydrated.experiments.flatMap((experiment) => {
+    const variants = experiment.variants ?? [];
+    const control = variants.find((v) => v.is_control) ?? null;
+    // `variantId` is checked: flame-edge cookies signed before it learned to
+    // omit variant-less users carry `variantId: null`.
+    const variantId = prehydrated.assignments[experiment.id]?.variantId;
+    const assigned = variantId ? variants.find((v) => v.id === variantId) : undefined;
+    // Left out: held out, capped or archived. They see control, unrecorded.
+    const variant = assigned ?? control;
+    if (!variant) return [];
+    return [
+      {
+        experimentId: experiment.id,
+        slug: experiment.slug ?? experiment.id,
+        urlPattern: experiment.url_pattern ?? null,
+        variant,
+        control,
+        exposure: !!assigned,
+      },
+    ];
+  });
+}
+
+/**
  * Main Flame SDK class
  */
 class Flame {
   private config: FlameConfig | null = null;
   private apiClient: ApiClient | null = null;
+  private apiKey = '';
   private trackingManager: TrackingManager | null = null;
   private userId: string | null = null;
   private identity: Identity | null = null;
   private context: UserContext | null = null;
-  private experiments: Experiment[] = [];
-  // Arms decided at init. Evaluated arms are registered (events carry them,
-  // getVariant reports them) only when delivered (flame#46).
-  private arms: Map<string, StoredAssignment> = new Map();
-  // Delivered and registered arms.
-  private assignments: Map<string, StoredAssignment> = new Map();
-  // Winners of promoted experiments this user sees. Applied to the DOM only:
-  // never registered for tracking, since a concluded experiment's results
-  // are frozen (flame#42).
-  private promotedWinners: Variant[] = [];
+  // The rules file the arms were picked from. None for a flame-edge answer.
+  private rules: RulesFile | null = null;
+  // This visitor's answer for every experiment flame knows (flame#24).
+  private arms: Arm[] = [];
+  // Arms read and recorded on this page view, by experiment id. A later read
+  // returns the same variant, even after a refreshed rules file or identify().
+  private exposed: Map<string, Variant> = new Map();
   private initialized = false;
+  private readyPromise!: Promise<void>;
+  private resolveReady!: () => void;
   private consentStatus: ConsentState = 'not_required';
-  private applyAfterReveal = false;
-  private hydrationWaitStart: number | null = null;
-  // Resolves start()'s wait once applyAllVariants has delivered or skipped.
-  private onDeliveryDecided: (() => void) | null = null;
-  // The live start(). A second call joins it instead of starting again, or
-  // the first one's delivery wait would never resolve.
+  // The live start(). A second call joins it instead of starting again.
   private starting: Promise<void> | null = null;
   // Bumped by stopStart(). A start begun under an older generation stops at
   // its next await, so an answer arriving after the visitor withdrew, or the
   // SDK reset, changes nothing and records nothing.
   private generation = 0;
   private identityMeta: IdentityMetadata | null = null;
-  private domWatcher: { stop: () => void } | null = null;
-  private navigationWatcher: { stop: () => void } | null = null;
-  // Experiments whose change is on the current page (flame#50): applied once
-  // per page, undone when a client-side navigation leaves it.
-  private appliedOnThisPage = new Set<string>();
   // Events fired via track() before init() ran — buffered here and flushed
   // once the tracking manager exists (useTrack pre-init buffering, #20).
   private pendingEvents: Array<{ eventType: string; metadata?: Record<string, unknown> }> = [];
+
+  constructor() {
+    this.newReadyPromise();
+  }
+
+  /**
+   * Resolves when init completes and reads answer: with the visitor's arms,
+   * or with control when flame cannot run or has no rules file (flame#24).
+   * Page code awaits this instead of polling `isInitialized()`. The same
+   * moment dispatches {@link READY_EVENT} on `window`.
+   */
+  get ready(): Promise<void> {
+    return this.readyPromise;
+  }
 
   /**
    * Initialize the SDK with configuration
@@ -100,15 +135,17 @@ class Flame {
 
     // Parse the DSN and create client
     const parsed = parseDsn(config.dsn);
+    this.apiKey = parsed.apiKey;
     this.apiClient = new ApiClient(parsed.apiKey, parsed.apiUrl, config.debug);
     this.log('Initialized', { apiUrl: parsed.apiUrl });
 
     // Before consent, nothing: no ID, no storage, no network (flame#18).
     // The rules (signals, a saved choice, the posture) live in consent.ts.
+    // Reads answer control.
     this.consentStatus = initialConsentState(!!config.requireConsent);
     if (!consentAllowsRunning(this.consentStatus)) {
       this.log('Not running', { consent: this.consentStatus });
-      this.getAntiflicker()?.reveal();
+      this.settle();
       return;
     }
 
@@ -117,8 +154,7 @@ class Flame {
 
   /**
    * Record the visitor's consent choice (flame#18). `true` starts flame on
-   * the current page, applying the variant even though the original is
-   * already showing, and saves the choice.
+   * the current page and saves the choice.
    */
   consent(granted: boolean): ConsentState {
     if (!granted) return this.withdraw();
@@ -138,7 +174,7 @@ class Flame {
     storeConsent('granted');
     // 'next-page': the grant is saved; init starts flame on the next load.
     if (this.config.consentApply !== 'next-page') {
-      void this.start(this.config, { afterReveal: true });
+      void this.start(this.config);
     }
     return this.consentStatus;
   }
@@ -147,52 +183,45 @@ class Flame {
    * Withdraw consent (flame#18). Fully synchronous, with no await, so no
    * unload or tab-hide flush can run part-way through. Sends nothing more:
    * the tracker's queue is dropped, not flushed, and its retry store
-   * deleted. Then every stored identifier and the assignments cache go.
-   * The page is left as it is: showing a variant is not tracking. Only the
-   * refusal is kept, so later pages honour it. A request already sent
-   * before this call cannot be recalled.
+   * deleted. Then every stored identifier, the assignments cache and the
+   * stored rules file go.
+   * Reads answer control from now on. Only the refusal is kept, so later
+   * pages honour it. A request already sent before this call cannot be
+   * recalled.
    */
   private withdraw(): ConsentState {
-    // No more page changes after withdrawal, promoted winners included (#45).
-    this.stopWatching();
     this.trackingManager?.discard();
     this.trackingManager = null;
     this.stopStart();
     this.pendingEvents = [];
     clearStoredIdentity();
     clearStoredAssignments();
-    this.arms.clear();
-    this.assignments.clear();
-    this.appliedOnThisPage.clear();
+    clearStoredRules(this.apiKey);
+    this.rules = null;
+    this.arms = [];
+    this.exposed.clear();
     this.consentStatus = 'denied';
     storeConsent('denied');
     return this.consentStatus;
   }
 
-  /**
-   * Everything that needs consent: identity, tracking, assignment, apply.
-   * `afterReveal`: started by consent on a page already showing the
-   * original, so apply even though the anti-flicker hide has been lifted.
-   */
-  private start(config: FlameConfig, options: { afterReveal?: boolean } = {}): Promise<void> {
-    this.starting ??= this.run(config, options);
+  /** Everything that needs consent: identity, tracking, the arms. */
+  private start(config: FlameConfig): Promise<void> {
+    this.starting ??= this.run(config);
     return this.starting;
   }
 
-  private async run(config: FlameConfig, { afterReveal = false } = {}): Promise<void> {
+  private async run(config: FlameConfig): Promise<void> {
     // init() creates the client before anything can call start().
     if (!this.apiClient) return;
     const generation = this.generation;
     const stopped = () => generation !== this.generation;
-    this.applyAfterReveal = afterReveal;
 
     // Initialize session start time (for identity linking)
     initSessionStart();
 
-    // If the caller pre-resolved state at the edge, align our
-    // device id with the user_id used at resolution time. Must
-    // happen before getIdentity() so the SDK reads the seeded
-    // value as its own.
+    // A flame-edge answer was picked for its user_id: make it this device's
+    // id. Must happen before getIdentity() reads it.
     if (config.prehydrated) {
       seedDeviceId(config.prehydrated.user_id, config.prehydrated.user_id_created_at);
     }
@@ -222,379 +251,187 @@ class Flame {
         : 'new',
     });
 
-    // Identity metadata for CUPED, sent with /evaluate and each record.
-    const identityMeta: IdentityMetadata = {
+    // Identity metadata for CUPED, sent with each record.
+    this.identityMeta = {
       type: this.identity.type,
       device_id: this.identity.deviceId,
       device_id_created_at: this.identity.deviceIdCreatedAt ?? undefined,
     };
-    this.identityMeta = identityMeta;
+
+    // The pageview goes out now, with no wait on the network. It carries
+    // the arms recorded on earlier visits whose experiments still run.
+    const stored = config.prehydrated ? null : loadStoredRules(this.apiKey);
+    this.carryRecordedArms(stored);
+    for (const event of this.pendingEvents) {
+      this.trackingManager.track(event.eventType, event.metadata);
+    }
+    this.pendingEvents = [];
+    this.trackingManager.trackPageview();
 
     try {
-      // Either way nobody is enrolled yet: flame records each arm it delivers
-      // (flame#46), the edge's arms included (flame#47).
       if (config.prehydrated) {
-        // Edge-resolved path: skip the active-experiments + evaluate
-        // HTTP roundtrips and seed the arms directly. Used by the
-        // React SDK's SSR flow with `@cuped-io/flame-edge`.
-        this.experiments = config.prehydrated.experiments;
-        this.log(`Using ${this.experiments.length} prehydrated experiments`);
-
-        for (const experiment of this.experiments) {
-          this.registerExperiment(experiment, config.prehydrated.assignments[experiment.id]);
-        }
+        // flame-edge picked the arms on the server: nothing to fetch.
+        this.arms = edgeArms(config.prehydrated);
       } else {
-        // Default path: fetch from the API.
-        const response = await this.apiClient.getActiveExperiments();
+        // A stored copy is used at once and refreshed in the background;
+        // with none, the arms wait for the fetch.
+        const fetched = this.fetchRules(stopped);
+        const rules = stored ?? (await fetched);
         if (stopped()) return;
-        this.experiments = response.experiments;
-
-        this.log(`Found ${this.experiments.length} active experiments`);
-
-        // Every arm and promoted winner in one `/evaluate` (flame#46), which
-        // enrols nobody. A failed evaluation renders the original for every
-        // experiment without a cached arm, and does not fail init (flame#35).
-        const { arms, winners } = await resolveAssignments(
-          this.experiments,
-          response.promoted ?? [],
-          this.userId,
-          this.apiClient,
-          this.context ?? undefined,
-          identityMeta
-        );
-        if (stopped()) return;
-        for (const experiment of this.experiments) {
-          this.registerExperiment(experiment, arms.get(experiment.id));
+        if (rules) await this.pick(rules, stopped);
+        if (stored) {
+          void fetched.then((fresh) => {
+            if (fresh && !stopped()) return this.pick(fresh, stopped);
+          });
         }
-        this.promotedWinners = winners;
-        this.log(`Serving ${this.promotedWinners.length} promoted winners`);
       }
-
-      // Apply variants when DOM is ready. Nothing tagged with an arm goes out
-      // before that arm's record (flame#46), so the buffered events and the
-      // pageview wait for the delivery decision: applied, or skipped because
-      // the anti-flicker timeout already revealed the original.
-      const decided = new Promise<void>((resolve) => {
-        this.onDeliveryDecided = resolve;
-      });
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => this.applyAllVariants(generation));
-      } else {
-        this.applyAllVariants(generation);
-      }
-
-      // Start auto-tracking (clicks on changed elements; no goals, flame#60)
-      this.trackingManager.startAutoTracking();
-
-      // Flush events buffered before init ran (#20), then the initial
-      // pageview. Once: after delivery, or when the visitor leaves first.
-      let pageviewSent = false;
-      const sendPageview = (tracker: TrackingManager) => {
-        if (pageviewSent) return;
-        pageviewSent = true;
-        for (const event of this.pendingEvents) {
-          tracker.track(event.eventType, event.metadata);
-        }
-        this.pendingEvents = [];
-        tracker.trackPageview();
-      };
-      // A visitor who leaves before the decision never saw the variant, so
-      // their pageview goes out now, with no arm, rather than not at all.
-      // The queue's own pagehide flush has already run, so flush again.
-      const onLeave = () => {
-        if (!this.trackingManager) return;
-        sendPageview(this.trackingManager);
-        this.trackingManager.flush();
-      };
-      window.addEventListener('pagehide', onLeave);
-
-      await decided;
-      window.removeEventListener('pagehide', onLeave);
-      // Consent may have been withdrawn, or the SDK reset, while waiting:
-      // then send nothing.
-      const tracker = this.trackingManager as TrackingManager | null;
-      if (stopped() || !tracker) return;
-
-      // Delivered arms are now registered, so these carry them.
-      sendPageview(tracker);
-
-      this.initialized = true;
-      this.log('Flame SDK initialized successfully');
     } catch (error) {
       console.error('[Flame] Failed to initialize:', error);
-      // Never leave an anti-flicker page hidden until its timeout (flame#35).
-      this.getAntiflicker()?.reveal();
+    }
+    if (stopped()) return;
+    this.log(`Answering for ${this.arms.length} experiments`);
+    this.settle();
+  }
+
+  /**
+   * The rules file from ember (ember#309), kept for the next load. `null`
+   * when it cannot be fetched or read: reads then answer control.
+   */
+  private async fetchRules(stopped: () => boolean): Promise<RulesFile | null> {
+    try {
+      const rules = parseRules(await this.apiClient?.getRules());
+      if (!rules) {
+        console.warn('[Flame] The rules file is not a version this flame reads; showing control.');
+        return null;
+      }
+      if (!stopped()) storeRules(this.apiKey, rules);
+      return rules;
+    } catch (error) {
+      this.log('Rules file unavailable:', error);
+      return null;
     }
   }
 
   /**
-   * Note one experiment's arm, to register with the tracker once delivered.
-   * Its goals need nothing here (flame#60): ember matches them by event
-   * name, so the pageview and the page's `track()` calls are all they need.
-   *
-   * No assignment means the user is in no variant — held out, the
-   * workspace is capped or archived, or edge resolution skipped it. That
-   * is a normal outcome: the page renders the original and events carry
-   * no assignment for this experiment, so a held-out user's conversions
-   * still reach the Holdout comparison.
+   * This visitor's arms from `rules`, unless the start was stopped meanwhile.
+   * If identify() or clearIdentity() changed the user while hashing, the
+   * arms are for the wrong user: pick again for the current one.
    */
-  private registerExperiment(
-    experiment: Experiment,
-    assignment: StoredAssignment | null | undefined
-  ): void {
-    // `variantId` is checked too: flame-edge cookies signed before it learned
-    // to omit variant-less users carry `variantId: null`.
-    if (assignment?.variantId) {
-      // Events carry it only once it is delivered (flame#46).
-      this.arms.set(experiment.id, assignment);
-      this.log(`Assigned to variant ${assignment.variantId} for experiment ${experiment.id}`);
-    } else {
-      this.log(`No variant for experiment ${experiment.id} — rendering original`);
-    }
+  private async pick(rules: RulesFile, stopped: () => boolean): Promise<void> {
+    const userId = this.userId ?? '';
+    const arms = await pickArms(rules, userId, savedArms());
+    if (stopped()) return;
+    if (userId !== (this.userId ?? '')) return this.pick(rules, stopped);
+    this.rules = rules;
+    this.arms = arms;
   }
 
   /**
-   * Stop the live start, if any: it returns at its next await instead of
-   * applying, recording or sending. Its delivery wait is released here, since
-   * its applyAllVariants will now return before deciding.
+   * Register the arms this visitor had recorded on an earlier visit, so
+   * events carry them before any read. Only for experiments the stored
+   * rules file lists, with the same variant.
    */
+  private carryRecordedArms(rules: RulesFile | null): void {
+    if (!rules) return;
+    const userId = this.userId ?? '';
+    const saved = savedArms();
+    const wasRecorded = recordedArms();
+    for (const experiment of rules.experiments) {
+      const arm = saved[experiment.id];
+      if (
+        arm?.userId === userId &&
+        experiment.variants.some((v) => v.id === arm.variantId) &&
+        wasRecorded(experiment.id, userId, arm.variantId)
+      ) {
+        this.trackingManager?.registerAssignment(arm);
+      }
+    }
+  }
+
+  /** Init is done: reads answer, and page code waiting on ready hears it. */
+  private settle(): void {
+    this.initialized = true;
+    this.resolveReady();
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(READY_EVENT));
+    this.log('Flame SDK initialized successfully');
+  }
+
+  private newReadyPromise(): void {
+    this.readyPromise = new Promise((resolve) => {
+      this.resolveReady = resolve;
+    });
+  }
+
+  /** Stop the live start, if any: it returns at its next await. */
   private stopStart(): void {
     this.generation++;
     this.starting = null;
-    this.deliveryDecided();
-  }
-
-  /** Lets start() send what waited for the delivery decision. Once. */
-  private deliveryDecided(): void {
-    const resolve = this.onDeliveryDecided;
-    this.onDeliveryDecided = null;
-    resolve?.();
-  }
-
-  /** Events carry this arm from now on, and getVariant reports it. */
-  private registerAssignment(assignment: StoredAssignment): void {
-    this.assignments.set(assignment.experimentId, assignment);
-    this.trackingManager?.registerAssignment(assignment);
   }
 
   /**
-   * Apply all assigned variants to the DOM, then reveal the page.
-   *
-   * Anti-flicker (flame#16): an inline snippet hides the page until we
-   * reveal it, so the control never flashes before the variant applies.
-   * We reveal here — the moment variants are on — which beats the snippet's
-   * timeout on the happy path. If the timeout already fired (slow API, page
-   * already revealed showing the original), we skip applying: a late DOM
-   * swap on an already-visible page would itself be a flash, so those
-   * visitors stay on control. No-op when no anti-flicker snippet is present.
+   * The variant to show for `key` (an experiment's id or slug), recording
+   * the arm on its first read (flame#24). Records nothing, and answers
+   * control or `null`, when flame is not ready, the visitor is held out,
+   * or the experiment does not run on this page.
    */
-  private applyAllVariants(generation: number): void {
-    // Withdrawn or reset since this start began: withdraw() and reset() have
-    // already released its delivery wait, so only stop.
-    if (generation !== this.generation) return;
-    const af = this.getAntiflicker();
+  private read(key: string): Variant | null {
+    if (!this.initialized) return null;
+    const arm = this.arms.find((a) => a.experimentId === key || a.slug === key);
+    if (!arm) return null;
+    const exposed = this.exposed.get(arm.experimentId);
+    if (exposed) return exposed;
 
-    // Timeout already revealed the original → don't apply late (would flash).
-    // Except after consent, where applying on the visible page is the design.
-    if (af?.revealed && !this.applyAfterReveal) {
-      this.deliveryDecided();
-      // A later client-side navigation renders a new page, so it may deliver.
-      this.watchNavigation();
-      return;
-    }
+    const here = runsOnThisPage({ url_pattern: arm.urlPattern });
+    if (!arm.exposure) return here ? arm.variant : arm.control;
 
-    // On a server-rendered React page, wait until React has hydrated every
-    // target element, or React throws #418 and discards the variant (#44).
-    if (this.shouldWaitForHydration() && !targetsHydrated(this.targetSelectors())) {
-      this.hydrationWaitStart ??= Date.now();
-      if (Date.now() - this.hydrationWaitStart < HYDRATION_TIMEOUT_MS) {
-        setTimeout(() => this.applyAllVariants(generation), HYDRATION_POLL_MS);
-        return;
-      }
-      this.log('React did not hydrate the targets in time; applying anyway');
-    }
-
-    try {
-      this.deliverArms();
-      for (const winner of this.promotedWinners) {
-        this.applySafely(winner);
-      }
-    } finally {
-      af?.reveal();
-      this.deliveryDecided();
-    }
-
-    this.watchForFreshTargets();
-    this.watchNavigation();
-  }
-
-  /**
-   * Deliver each arm whose experiment runs on the current page: record it if
-   * this user's arm was never recorded, register it, and apply it once per
-   * page load. Runs at init and on each client-side navigation (flame#50).
-   */
-  private deliverArms(): void {
-    const wasRecorded = recordedArms();
     const userId = this.userId ?? '';
-    for (const experiment of this.experiments) {
-      const assignment = this.arms.get(experiment.id);
-      if (!assignment) continue;
-
-      const variant = getAssignedVariant(experiment, assignment);
-      if (!variant) continue;
+    const assignment: StoredAssignment = {
+      experimentId: arm.experimentId,
+      variantId: arm.variant.id,
+      userId,
+      assignedAt: new Date().toISOString(),
+    };
+    // Recorded on an earlier visit: carried again, wherever it is read.
+    if (!recordedArms()(arm.experimentId, userId, arm.variant.id)) {
       // Not this page's experiment (flame#50): the visitor is not assigned
-      // here. One already counted on a matching page still carries the arm,
-      // so a conversion here is attributed, but sees no change.
-      if (!runsOnThisPage(experiment)) {
-        if (wasRecorded(experiment.id, userId, variant.id)) this.registerAssignment(assignment);
-        continue;
-      }
-
-      // Delivered: count the visitor in this arm (flame#46). Recorded at the
-      // decision to apply, not on a DOM change, so control (no changes) and
-      // a variant whose change fails are counted the same way.
-      // Recorded before it is registered, so no event carries an arm ember
-      // has not been told about.
-      if (!wasRecorded(experiment.id, userId, variant.id)) {
-        // Marked only once the record is sent; until then each page load
-        // records again, and ember ignores the duplicates.
-        const queued = this.trackingManager?.recordAssignment(
-          experiment.id,
-          variant.id,
-          {
-            context: (this.context ?? undefined) as Record<string, unknown> | undefined,
-            identity: this.identityMeta ?? undefined,
-            path: window.location.pathname,
-          },
-          () => markRecorded({ ...assignment, userId })
-        );
-        // An arm flame cannot record is not delivered: the visitor sees
-        // the original, as when the anti-flicker timeout wins.
-        if (!queued) continue;
-      }
-      this.registerAssignment(assignment);
-      // Once per page: a target re-created later is the watcher's (#45).
-      if (this.appliedOnThisPage.has(experiment.id)) continue;
-      this.appliedOnThisPage.add(experiment.id);
-      this.applySafely(variant);
+      // here, and ember would refuse the record.
+      if (!here) return arm.control;
+      // Marked only once the record is sent; until then each page load
+      // records again, and ember ignores the duplicates.
+      const queued = this.trackingManager?.recordAssignment(
+        arm.experimentId,
+        arm.variant.id,
+        {
+          context: (this.context ?? undefined) as Record<string, unknown> | undefined,
+          identity: this.identityMeta ?? undefined,
+          path: window.location.pathname,
+        },
+        () => markRecorded(assignment)
+      );
+      // An arm flame cannot record is not shown.
+      if (!queued) return arm.control;
     }
+    // Recorded before it is registered, so no event carries an arm ember
+    // has not been told about.
+    this.exposed.set(arm.experimentId, arm.variant);
+    this.trackingManager?.registerAssignment(assignment);
+    return arm.variant;
   }
 
-  /** One variant's failure must not stop the others or the reveal (flame#35). */
-  private applySafely(variant: Variant): void {
-    try {
-      applyVariant(variant, this.config?.debug);
-    } catch (error) {
-      console.warn(`[Flame] Failed to apply variant ${variant.id}:`, error);
-    }
-  }
-
-  /**
-   * A single-page app changes its URL without a page load: deliver the arms
-   * of experiments that now match (flame#50). Only when an experiment has a
-   * pattern, so other sites' history is left alone.
-   */
-  private watchNavigation(): void {
-    if (this.navigationWatcher || typeof window === 'undefined') return;
-    if (!this.experiments.some((e) => e.url_pattern)) return;
-    this.navigationWatcher = watchPathChanges(() => this.onPathChange());
-  }
-
-  /**
-   * The page changed without a load. An experiment that stops matching has
-   * its change undone, on whatever the app kept on screen; flame can only
-   * roll back everything, so the rest is applied again, without redirects,
-   * which have already happened. Then this page's arms are delivered.
-   */
-  private onPathChange(): void {
-    const leaving = this.experiments.filter(
-      (e) => this.appliedOnThisPage.has(e.id) && !runsOnThisPage(e)
-    );
-    if (leaving.length > 0) {
-      rollbackChanges();
-      for (const experiment of leaving) this.appliedOnThisPage.delete(experiment.id);
-      const reapply = (variant: Variant) =>
-        this.applySafely({
-          ...variant,
-          changes: variant.changes?.filter((c) => c.type !== 'redirect'),
-        });
-      for (const experiment of this.experiments) {
-        const arm =
-          this.appliedOnThisPage.has(experiment.id) && this.assignments.get(experiment.id);
-        const variant = arm && getAssignedVariant(experiment, arm);
-        if (variant) reapply(variant);
-      }
-      this.promotedWinners.forEach(reapply);
-    }
-    this.deliverArms();
-    // An app often routes first and renders after: the watcher catches the
-    // targets that appear once it does (flame#45).
-    this.watchForFreshTargets();
-  }
-
-  /**
-   * After the first apply, re-apply a variant when one of its targets appears
-   * without flame's data-flame-modified marker: a framework re-created it (a
-   * remount, client-side navigation away and back), so it lost the variant
-   * (flame#45).
-   */
-  private watchForFreshTargets(): void {
-    if (this.config?.reapplyOnChange === false) return;
-    if (this.domWatcher || typeof MutationObserver === 'undefined') return;
-    this.domWatcher = watchForFreshTargets(() => this.activeVariants(), this.config?.debug);
-  }
-
-  /** No more page changes: neither re-applies nor navigation deliveries. */
-  private stopWatching(): void {
-    this.domWatcher?.stop();
-    this.domWatcher = null;
-    this.navigationWatcher?.stop();
-    this.navigationWatcher = null;
-  }
-
-  /** The opt-in when set; otherwise whether the page is React SSR. */
-  private shouldWaitForHydration(): boolean {
-    return this.config?.waitForHydration ?? reactSsrDetected();
-  }
-
-  /** The variants of these arms on this page (flame#50), plus the promoted winners. */
-  private variantsOf(arms: Map<string, StoredAssignment>): Variant[] {
-    return [
-      ...this.experiments.flatMap((experiment) => {
-        const arm = arms.get(experiment.id);
-        const variant = arm && runsOnThisPage(experiment) && getAssignedVariant(experiment, arm);
-        return variant ? [variant] : [];
-      }),
-      ...this.promotedWinners,
-    ];
-  }
-
-  /** The assigned variants and promoted winners this visitor sees. */
-  private activeVariants(): Variant[] {
-    return this.variantsOf(this.assignments);
-  }
-
-  /** The selectors the arms about to be delivered and promoted winners change. */
-  private targetSelectors(): string[] {
-    return this.variantsOf(this.arms).flatMap((v) =>
-      (v.changes ?? []).flatMap((c) => ('selector' in c ? [c.selector] : []))
-    );
-  }
-
-  /** The page's anti-flicker handle, if the inline snippet installed one. */
-  private getAntiflicker(): { revealed: boolean; reveal: () => void } | undefined {
-    if (typeof window === 'undefined') return undefined;
-    return (window as unknown as { __cupedAntiflicker?: { revealed: boolean; reveal: () => void } })
-      .__cupedAntiflicker;
+  /** Pick again for a new user id, once identify() or clearIdentity() changed it. */
+  private async repick(): Promise<void> {
+    if (!this.rules) return;
+    const generation = this.generation;
+    await this.pick(this.rules, () => generation !== this.generation);
   }
 
   /**
    * Track an event
    *
-   * Fires one event per user action with the active experiment
-   * assignments attached for server-side goal matching. For SPA
-   * navigation call `track('pageview')` when the URL changes; for
-   * conversions call `track('conversion', …)`.
+   * Fires one event per user action, carrying the arms recorded so far
+   * for server-side goal matching. For SPA navigation call
+   * `track('pageview')` when the URL changes; for conversions call
+   * `track('conversion', …)`.
    *
    * @param eventType - Type of event (pageview, add_to_cart, conversion, etc.)
    * @param metadata - Optional metadata for event-specific data
@@ -642,6 +479,8 @@ class Flame {
    * - More reliable CUPED analysis
    * - Better user journey tracking
    *
+   * Arms not yet read on this page are picked again for the new ID.
+   *
    * @param userId - The authenticated user ID from your system
    */
   async identify(userId: string): Promise<void> {
@@ -659,6 +498,7 @@ class Flame {
     // one's listeners firing under the device ID and never started the new
     // one's.
     this.trackingManager?.setUserId(this.userId);
+    await this.repick();
 
     // Link the authenticated user to their device ID for CUPED
     // This allows the backend to find pre-period events from before authentication
@@ -693,76 +533,61 @@ class Flame {
     this.userId = this.identity.userId;
     // Events after logout carry the device ID again (flame#36).
     this.trackingManager?.setUserId(this.userId);
+    void this.repick();
 
     this.log('Identity cleared', { identityType: this.identity.type });
   }
 
   /**
-   * Get the assigned variant ID for an experiment.
+   * The variant ID to show for an experiment, by its id or slug.
    *
-   * Returns the variant UUID, or `null` if the user is not assigned
-   * (experiment unknown, init not finished, etc.). For richer variant
-   * info — name, is_control, the configured changes — use
-   * `getAssignedVariantInfo(experimentId)` instead.
+   * Answers at once. The first read of the visitor's real arm records it
+   * (flame#24): an experiment the page never reads is never recorded.
+   * Returns control's ID for a Holdout member or a page outside the
+   * experiment's pattern, and `null` when flame is not ready or does not
+   * know the experiment: show control then. For the name and the rest of
+   * the variant, use `getAssignedVariantInfo(key)`.
    */
-  getVariant(experimentId: string): string | null {
-    const assignment = this.assignments.get(experimentId);
-    return assignment?.variantId ?? null;
+  getVariant(key: string): string | null {
+    return this.read(key)?.id ?? null;
   }
 
   /**
-   * Get the assigned variant object for an experiment.
-   *
-   * Returns the full {@link Variant} (id, name, is_control, changes)
-   * when the user is assigned and the experiment is known to the
-   * SDK; `null` otherwise. The React SDK uses this for the
-   * `useExperiment` hook so callers can branch on variant *name*
-   * rather than UUID.
+   * The variant to show for an experiment, by its id or slug: id, name,
+   * `is_control`. A read like {@link getVariant}, and `null` when it is.
+   * The React SDK uses this for `useExperiment`, so callers can branch on
+   * the variant's name.
    */
-  getAssignedVariantInfo(experimentId: string): Variant | null {
-    const assignment = this.assignments.get(experimentId);
-    if (!assignment) return null;
-    const experiment = this.experiments.find((e) => e.id === experimentId);
-    if (!experiment) return null;
-    return getAssignedVariant(experiment, assignment) ?? null;
+  getAssignedVariantInfo(key: string): Variant | null {
+    return this.read(key);
   }
 
   /**
-   * Check if a user is in a specific variant.
-   *
-   * Accepts either the variant UUID (compares against the
-   * assignment's variantId) or — for ergonomics — the variant name
-   * (looks up the experiment and compares names).
+   * Whether the visitor sees this variant, given its UUID or its name. A
+   * read like {@link getVariant}.
    */
-  isInVariant(experimentId: string, variantOrName: string): boolean {
-    if (this.getVariant(experimentId) === variantOrName) return true;
-    const info = this.getAssignedVariantInfo(experimentId);
-    return info?.name === variantOrName;
+  isInVariant(key: string, variantOrName: string): boolean {
+    const variant = this.read(key);
+    return variant?.id === variantOrName || variant?.name === variantOrName;
   }
 
   /**
-   * Whether the SDK has finished initializing.
-   *
-   * `true` once `init()` has resolved (experiments fetched,
-   * assignments resolved). The React provider uses this to gate
-   * `useExperiment`'s `isLoading` flag.
+   * Whether init has completed and reads answer. Await {@link ready}
+   * instead of polling this.
    */
   isInitialized(): boolean {
     return this.initialized;
   }
 
   /**
-   * Reset all assignments and rollback changes
+   * Forget every arm and stop: reads answer `null` until the next init.
    */
   reset(): void {
-    this.stopWatching();
-    rollbackChanges();
     this.trackingManager?.stopAutoTracking();
-    this.arms.clear();
-    this.assignments.clear();
-    this.appliedOnThisPage.clear();
-    this.experiments = [];
-    this.promotedWinners = [];
+    this.arms = [];
+    this.rules = null;
+    this.exposed.clear();
+    if (this.initialized) this.newReadyPromise();
     this.initialized = false;
     this.stopStart();
     this.log('Flame SDK reset');

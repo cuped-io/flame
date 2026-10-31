@@ -1,31 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
-import type { Experiment } from './types';
-import { evaluateBody } from './test-evaluation';
+import type { RulesFile } from './rules';
 
 // flame#18, design revised 2026-10-11 (recorded on the issue).
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@example.com';
 
-const experiment: Experiment = {
-  id: 'exp-1',
-  project_id: 'proj-1',
-  name: 'Hero',
-  description: null,
-  status: 'running',
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-  goals: [{ name: 'cta_click', type: 'click', selector: '#cta' }],
-  variants: [
+// One arm with all the weight, so every visitor's pick is variant-A.
+const rules: RulesFile = {
+  version: 1,
+  experiments: [
     {
-      id: 'variant-A',
-      experiment_id: 'exp-1',
-      name: 'treatment',
-      description: null,
-      is_control: false,
-      created_at: '2024-01-01T00:00:00Z',
-      updated_at: '2024-01-01T00:00:00Z',
-      changes: [{ type: 'text', selector: '#headline', value: 'Variant headline' }],
+      id: 'exp-1',
+      slug: 'hero',
+      url_pattern: null,
+      variants: [{ id: 'variant-A', name: 'treatment', is_control: false, weight: 1 }],
+    },
+  ],
+  holdout: null,
+  promoted: [
+    {
+      id: 'exp-old',
+      slug: 'old',
+      url_pattern: null,
+      winner_promoted_at: '2026-01-01T00:00:00Z',
+      winner: { id: 'winner', name: 'Winner', is_control: false, weight: 1 },
     },
   ],
 };
@@ -34,32 +33,18 @@ type Call = { url: string; body: unknown };
 
 /**
  * Every request flame makes, by fetch or sendBeacon, lands in `calls`.
- * `evaluateGate`: `/evaluate` answers only once it resolves.
+ * `rulesGate`: `/rules` answers only once it resolves.
  */
-function stubApi(evaluateGate?: Promise<void>) {
+function stubApi(rulesGate?: Promise<void>) {
   const calls: Call[] = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
-      if (url.endsWith('/experiments/active')) {
-        return new Response(JSON.stringify({ experiments: [experiment] }), { status: 200 });
-      }
-      if (url.endsWith('/evaluate')) {
-        await evaluateGate;
-        return new Response(
-          evaluateBody({
-            assignment_id: 'a1',
-            experiment_id: 'exp-1',
-            variant_id: 'variant-A',
-            variant_name: 'treatment',
-            is_control: false,
-            assigned_at: '2024-01-01T00:00:00Z',
-            resolution: 'assigned',
-          }),
-          { status: 200 }
-        );
+      if (url.endsWith('/rules')) {
+        await rulesGate;
+        return new Response(JSON.stringify(rules), { status: 200 });
       }
       return new Response('{}', { status: 200 });
     })
@@ -100,32 +85,26 @@ function hideTab() {
   window.dispatchEvent(new Event('pagehide'));
 }
 
-const headline = () => document.getElementById('headline')?.textContent;
 const flameKeys = () => Object.keys(localStorage).filter((k) => k.startsWith('flame_'));
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 describe('consent (flame#18)', () => {
   let flame: Flame;
+  // What page code reading the experiment gets: the arm, or null for control.
+  const arm = () => flame.getVariant('hero');
 
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    document.body.innerHTML = '<h1 id="headline">Original</h1><button id="cta">Go</button>';
   });
 
   afterEach(() => {
     flame?.reset();
-    delete (window as unknown as { __cupedAntiflicker?: unknown }).__cupedAntiflicker;
   });
 
-  it('with consent required and no choice yet: nothing sent, nothing stored, original page, page revealed', async () => {
+  it('with consent required and no choice yet: nothing sent, nothing stored, control', async () => {
     const calls = stubApi();
-    const reveal = vi.fn();
-    (window as unknown as { __cupedAntiflicker: unknown }).__cupedAntiflicker = {
-      revealed: false,
-      reveal,
-    };
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true });
     flame.track('custom_event');
@@ -133,23 +112,18 @@ describe('consent (flame#18)', () => {
 
     expect(calls).toHaveLength(0);
     expect(flameKeys()).toEqual([]);
-    expect(headline()).toBe('Original');
-    expect(reveal).toHaveBeenCalled();
+    expect(arm()).toBeNull();
     expect(flame.consentState()).toBe('pending');
   });
 
-  it('consent(true) applies the variant on the current page, saves the choice, and tracks; nothing from before counts', async () => {
+  it('consent(true) gives the arm on the current page, saves the choice, and tracks; nothing from before counts', async () => {
     const calls = stubApi();
-    // Like the real snippet: reveal() marks the page revealed. Pre-consent
-    // reveals the original, and a revealed page normally blocks a late apply.
-    const af = { revealed: false, reveal: () => (af.revealed = true) };
-    (window as unknown as { __cupedAntiflicker: unknown }).__cupedAntiflicker = af;
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true, enableBatching: false });
     flame.track('before_consent');
 
     expect(flame.consent(true)).toBe('granted');
-    await vi.waitFor(() => expect(headline()).toBe('Variant headline'));
+    await vi.waitFor(() => expect(arm()).toBe('variant-A'));
     expect(flame.consentState()).toBe('granted');
     expect(localStorage.getItem('flame_consent')).toBe('granted');
     flame.track('after_consent');
@@ -165,7 +139,7 @@ describe('consent (flame#18)', () => {
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true, flushIntervalMs: 60_000 });
     flame.consent(true);
-    await vi.waitFor(() => expect(headline()).toBe('Variant headline'));
+    await vi.waitFor(() => expect(arm()).toBe('variant-A'));
     flame.track('queued_event');
 
     hideTab();
@@ -179,7 +153,7 @@ describe('consent (flame#18)', () => {
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true, flushIntervalMs: 60_000 });
     flame.consent(true);
-    await vi.waitFor(() => expect(headline()).toBe('Variant headline'));
+    await vi.waitFor(() => expect(arm()).toBe('variant-A'));
     flame.track('queued_event');
     const sentBefore = calls.length;
 
@@ -193,8 +167,8 @@ describe('consent (flame#18)', () => {
     // Only the refusal itself remains, so it is honoured on later pages.
     expect(flameKeys()).toEqual(['flame_consent']);
     expect(localStorage.getItem('flame_consent')).toBe('denied');
-    // The page is left as it is.
-    expect(headline()).toBe('Variant headline');
+    // Reads answer control from now on.
+    expect(arm()).toBeNull();
   });
 
   // A start still waiting on the network when consent is withdrawn, or the
@@ -205,60 +179,51 @@ describe('consent (flame#18)', () => {
     return { opened, open };
   }
 
-  it('consent(false) while the evaluation is in flight: the start stops, nothing changes, nothing is stored', async () => {
-    const evaluation = gate();
-    const calls = stubApi(evaluation.opened);
+  it('consent(false) while the rules file is in flight: the start stops, nothing changes, nothing is stored', async () => {
+    const rulesFile = gate();
+    const calls = stubApi(rulesFile.opened);
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true });
     flame.consent(true);
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/evaluate'))).toBe(true));
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/rules'))).toBe(true));
     const sentBefore = calls.length;
 
     expect(flame.consent(false)).toBe('denied');
-    evaluation.open();
-    await settle();
-    // A target re-created after withdrawal stays original: no watcher.
-    document.body.innerHTML = '<h1 id="headline">Original</h1>';
+    rulesFile.open();
     await settle();
 
     expect(calls.length).toBe(sentBefore);
-    expect(headline()).toBe('Original');
+    expect(arm()).toBeNull();
     expect(flameKeys()).toEqual(['flame_consent']);
     expect(error).not.toHaveBeenCalled();
   });
 
-  it('reset() while the evaluation is in flight: the variant is not applied or recorded', async () => {
-    const evaluation = gate();
-    const calls = stubApi(evaluation.opened);
+  it('reset() while the rules file is in flight: no arm is read or recorded', async () => {
+    const rulesFile = gate();
+    const calls = stubApi(rulesFile.opened);
     flame = new Flame();
     const started = flame.init({ dsn: DSN, enableBatching: false });
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/evaluate'))).toBe(true));
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/rules'))).toBe(true));
     const sentBefore = calls.length;
 
     flame.reset();
-    evaluation.open();
+    rulesFile.open();
     await started;
-    await settle();
-    document.body.innerHTML = '<h1 id="headline">Original</h1>';
     await settle();
 
     expect(calls.length).toBe(sentBefore);
-    expect(headline()).toBe('Original');
+    expect(arm()).toBeNull();
   });
 
-  it('a saved grant starts flame at init on the next page: variant from the start, no swap', async () => {
+  it('a saved grant starts flame at init on the next page: the arm from the start', async () => {
     stubApi();
     localStorage.setItem('flame_consent', 'granted');
-    const af = { revealed: false, reveal: vi.fn(() => (af.revealed = true)) };
-    (window as unknown as { __cupedAntiflicker: unknown }).__cupedAntiflicker = af;
     flame = new Flame();
     await flame.init({ dsn: DSN, requireConsent: true });
 
-    expect(headline()).toBe('Variant headline');
+    expect(arm()).toBe('variant-A');
     expect(flame.consentState()).toBe('granted');
-    // One reveal, after the variant applied: the original was never shown.
-    expect(af.reveal).toHaveBeenCalledTimes(1);
   });
 
   it.each([true, false])(
@@ -272,7 +237,7 @@ describe('consent (flame#18)', () => {
       await settle();
 
       expect(calls).toHaveLength(0);
-      expect(headline()).toBe('Original');
+      expect(arm()).toBeNull();
       expect(flame.consentState()).toBe('denied');
     }
   );
@@ -293,7 +258,7 @@ describe('consent (flame#18)', () => {
 
       expect(calls).toHaveLength(0);
       expect(flameKeys()).toEqual([]);
-      expect(headline()).toBe('Original');
+      expect(arm()).toBeNull();
       expect(flame.consentState()).toBe('blocked_by_signal');
     }
   );
@@ -313,9 +278,24 @@ describe('consent (flame#18)', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(name));
       expect(calls).toHaveLength(0);
       expect(flameKeys()).toEqual([]);
-      expect(headline()).toBe('Original');
+      expect(arm()).toBeNull();
     }
   );
+
+  it('after a withdrawal, identify() brings no arm back', async () => {
+    stubApi();
+    flame = new Flame();
+    await flame.init({ dsn: DSN });
+    expect(flame.getVariant('old')).toBe('winner');
+
+    flame.consent(false);
+    await flame.identify('user-42');
+    flame.clearIdentity();
+    await settle();
+
+    expect(flame.getVariant('old')).toBeNull();
+    expect(arm()).toBeNull();
+  });
 
   it('accepting again after a withdrawal starts a new visitor', async () => {
     stubApi();
@@ -341,7 +321,7 @@ describe('consent (flame#18)', () => {
     await settle();
 
     expect(calls).toHaveLength(0);
-    expect(headline()).toBe('Original');
+    expect(arm()).toBeNull();
     expect(localStorage.getItem('flame_consent')).toBe('granted');
   });
 
@@ -350,7 +330,7 @@ describe('consent (flame#18)', () => {
     flame = new Flame();
     await flame.init({ dsn: DSN });
 
-    expect(headline()).toBe('Variant headline');
+    expect(arm()).toBe('variant-A');
     expect(flame.consentState()).toBe('not_required');
     expect(calls.length).toBeGreaterThan(0);
     // No consent choice was made, so none is recorded.
@@ -390,6 +370,6 @@ describe('consent (flame#18)', () => {
     expect(loaded.consent(true)).toBe('granted');
     await settle();
     expect(calls).toHaveLength(0);
-    expect(headline()).toBe('Original');
+    expect(arm()).toBeNull();
   });
 });

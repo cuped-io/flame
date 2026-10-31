@@ -34,10 +34,10 @@ export interface FlameConfig {
    */
   requireConsent?: boolean;
   /**
-   * When an accept takes effect (flame#18). `'immediate'` (default) assigns
-   * and applies the variant on the current page. `'next-page'` saves the
-   * grant and starts flame at the next document load. That effectively
-   * excludes single-page apps and single landing pages, where the next
+   * When an accept takes effect (flame#18). `'immediate'` (default) starts
+   * flame on the current page, so reads answer with the visitor's arms.
+   * `'next-page'` saves the grant and starts flame at the next document
+   * load. That effectively excludes single-page apps and single landing pages, where the next
    * document load may never come in the same visit.
    * Script tag: `data-consent-apply="next-page"`.
    */
@@ -46,18 +46,20 @@ export interface FlameConfig {
    * Apply a variant only once React has hydrated its target element
    * (flame#44). Applying before hydration makes React throw #418 and
    * discard the variant. Script tag: `data-wait-for-hydration="true"`.
+   * Ignored since flame stopped changing the page (flame#24); removed in flame#63.
    */
   waitForHydration?: boolean;
   /**
    * Keep watching the page after the first apply, and apply a variant to a
    * target that appears without it: a framework re-created it (a remount,
    * client-side navigation). Default true (flame#45). Script tag:
-   * `data-reapply="false"` turns it off.
+   * `data-reapply="false"` turns it off. Ignored since flame stopped changing
+   * the page (flame#24); removed in flame#63.
    */
   reapplyOnChange?: boolean;
   /**
    * Pre-resolved assignments + experiments. When supplied, `init()`
-   * skips the HTTP fetch and uses these directly. Produced by
+   * fetches no rules file and reads these at once (flame#24). Produced by
    * `@cuped-io/flame-edge` for SSR zero-flash; the React SDK forwards
    * its `prehydrated` prop here. See `PrehydratedState`.
    */
@@ -228,14 +230,16 @@ export interface Variant {
   experiment_id: string;
   /** Human-readable variant name */
   name: string;
-  /** Optional description */
-  description: string | null;
+  /** Optional description. The rules file (flame#24) does not carry it. */
+  description?: string | null;
   /** Whether this is the control variant */
   is_control: boolean;
-  /** Timestamp when created */
-  created_at: string;
-  /** Timestamp when last updated */
-  updated_at: string;
+  /** The pick's weight (flame#24). From the rules file only. */
+  weight?: number;
+  /** Timestamp when created. The rules file does not carry it. */
+  created_at?: string;
+  /** Timestamp when last updated. The rules file does not carry it. */
+  updated_at?: string;
   /** Changes to apply for this variant (stored as as JSON metadata) */
   changes?: VariantChange[];
 }
@@ -286,6 +290,8 @@ export interface Goal {
 export interface Experiment {
   /** Unique experiment ID */
   id: string;
+  /** URL-safe experiment slug. Reads accept it as well as the id (flame#24). */
+  slug?: string;
   /** Project this experiment belongs to */
   project_id: string;
   /** Human-readable experiment name */

@@ -27,70 +27,34 @@ describe('ApiClient', () => {
   describe('constructor', () => {
     it('should prepend API key to path', () => {
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify({ experiments: [] })),
-      });
+      fetchMock.mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('{}') });
 
-      client.getActiveExperiments();
+      client.getRules();
 
       expect(fetchMock).toHaveBeenCalledWith(
-        'https://api.cuped.io/pk_live_abc123/experiments/active',
+        'https://api.cuped.io/pk_live_abc123/rules',
         expect.any(Object)
-      );
-    });
-
-    it('should not include X-API-Key header', async () => {
-      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify({ experiments: [] })),
-      });
-
-      await client.getActiveExperiments();
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        })
       );
     });
   });
 
-  describe('getActiveExperiments', () => {
-    it('should fetch active experiments', async () => {
-      const mockResponse = {
-        experiments: [
-          {
-            id: 'exp-1',
-            project_id: 'project-123',
-            name: 'Test Experiment',
-            status: 'running',
-            variants: [],
-          },
-        ],
-      };
-
+  describe('getRules', () => {
+    it('fetches the rules file with a plain GET, which needs no CORS preflight', async () => {
+      const rules = { version: 1, experiments: [], holdout: null, promoted: [] };
       fetchMock.mockResolvedValueOnce({
         ok: true,
-        text: () => Promise.resolve(JSON.stringify(mockResponse)),
+        text: () => Promise.resolve(JSON.stringify(rules)),
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const result = await client.getActiveExperiments();
+      const result = await client.getRules();
 
-      expect(result).toEqual(mockResponse);
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://api.cuped.io/pk_live_abc123/experiments/active',
-        {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-          body: undefined,
-        }
-      );
+      expect(result).toEqual(rules);
+      expect(fetchMock).toHaveBeenCalledWith('https://api.cuped.io/pk_live_abc123/rules', {
+        method: 'GET',
+        headers: undefined,
+        body: undefined,
+      });
     });
 
     it('should throw error on failed request', async () => {
@@ -102,82 +66,22 @@ describe('ApiClient', () => {
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
 
-      await expect(client.getActiveExperiments()).rejects.toThrow(
+      await expect(client.getRules()).rejects.toThrow(
         'API request failed: 500 Internal Server Error'
       );
     });
   });
 
-  describe('evaluate', () => {
-    const mockResponse = {
-      evaluations: [
-        {
-          experiment_id: 'exp-1',
-          variant_id: 'variant-1',
-          variant_name: 'Control',
-          is_control: true,
-          resolution: 'assigned',
-        },
-      ],
-    };
-
-    it('asks for every arm in one POST /evaluate', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify(mockResponse)),
-      });
+  describe('linkIdentity', () => {
+    it('sends JSON with its Content-Type and no X-API-Key header', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('{}') });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const result = await client.evaluate('user-123');
+      await client.linkIdentity('user-123', 'device-456', 'device');
 
-      expect(result).toEqual(mockResponse);
-      expect(fetchMock).toHaveBeenCalledWith('https://api.cuped.io/pk_live_abc123/evaluate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: 'user-123' }),
-      });
-    });
-
-    it('sends context and identity when provided', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify(mockResponse)),
-      });
-
-      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-      const context = {
-        deviceType: 'mobile' as const,
-        browser: 'chrome',
-        os: 'android',
-        viewport: 'small' as const,
-        pixelRatio: 2,
-        language: 'en-US',
-        timezoneOffset: -480,
-        connection: 'unknown' as const,
-        touchSupported: true,
-        cookiesEnabled: true,
-      };
-      const identity = { type: 'device' as const, device_id: 'd_1' };
-      await client.evaluate('user-123', context, identity);
-
-      expect(fetchMock).toHaveBeenCalledWith('https://api.cuped.io/pk_live_abc123/evaluate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: 'user-123', context, identity }),
-      });
-    });
-
-    it('throws on a failed evaluation', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
-
-      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
-
-      await expect(client.evaluate('user-123')).rejects.toThrow(
-        'API request failed: 500 Internal Server Error'
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ headers: { 'Content-Type': 'application/json' } })
       );
     });
   });
@@ -192,7 +96,7 @@ describe('ApiClient', () => {
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io', true);
-      await client.getActiveExperiments();
+      await client.getRules();
 
       expect(consoleSpy).toHaveBeenCalled();
     });
@@ -206,7 +110,7 @@ describe('ApiClient', () => {
       });
 
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io', false);
-      await client.getActiveExperiments();
+      await client.getRules();
 
       expect(consoleSpy).not.toHaveBeenCalled();
     });
