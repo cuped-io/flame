@@ -5,6 +5,10 @@ import type { Flame, Variant } from '@cuped-io/flame';
  * Build a stub flame instance that satisfies the surface used by
  * the React provider/hooks (init, isInitialized, getAssignedVariantInfo,
  * track). Does not mock the rest of the SDK.
+ *
+ * `getAssignedVariantInfo` stands in for the core's read, whose first read
+ * of a real arm records it (flame#24). Like the core, it answers `null`
+ * before init completes. `readMock` shows which experiments were read.
  */
 export function createStubFlame(
   opts: {
@@ -19,10 +23,17 @@ export function createStubFlame(
      * `resolveInit` handle (for testing the loading state).
      */
     autoInit?: boolean;
+    /** If true, the stub is initialized before anything renders. */
+    ready?: boolean;
   } = {}
-): { flame: Flame; resolveInit: () => void; trackMock: ReturnType<typeof vi.fn> } {
-  const { assignments = {}, autoInit = true } = opts;
-  let initialized = false;
+): {
+  flame: Flame;
+  resolveInit: () => void;
+  trackMock: ReturnType<typeof vi.fn>;
+  readMock: ReturnType<typeof vi.fn>;
+} {
+  const { assignments = {}, autoInit = true, ready = false } = opts;
+  let initialized = ready;
   let resolveInit: () => void = () => {};
 
   const initPromise = autoInit
@@ -35,6 +46,9 @@ export function createStubFlame(
       });
 
   const trackMock = vi.fn();
+  const readMock = vi.fn((experimentId: string): Variant | null =>
+    initialized ? (assignments[experimentId] ?? null) : null
+  );
 
   const stub = {
     isInitialized: () => initialized,
@@ -45,9 +59,7 @@ export function createStubFlame(
       }
       await initPromise;
     }),
-    getAssignedVariantInfo: (experimentId: string): Variant | null => {
-      return assignments[experimentId] ?? null;
-    },
+    getAssignedVariantInfo: readMock,
     track: trackMock,
   } as unknown as Flame;
 
@@ -58,6 +70,7 @@ export function createStubFlame(
       resolveInit();
     },
     trackMock,
+    readMock,
   };
 }
 

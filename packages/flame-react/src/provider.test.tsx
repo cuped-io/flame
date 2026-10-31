@@ -27,7 +27,7 @@ describe('CupedProvider', () => {
     );
   });
 
-  it('exposes isLoading=true initially, isLoading=false after init', async () => {
+  it('is not ready initially, and ready after init', async () => {
     const { flame, resolveInit } = createStubFlame({ autoInit: false });
     const values: CupedContextValue[] = [];
 
@@ -38,11 +38,11 @@ describe('CupedProvider', () => {
     );
 
     // Initial render: not initialized yet.
-    expect(values[0]?.initialized).toBe(false);
+    expect(values[0]?.ready).toBe(false);
 
     resolveInit();
     await waitFor(() => {
-      expect(values.at(-1)?.initialized).toBe(true);
+      expect(values.at(-1)?.ready).toBe(true);
     });
   });
 
@@ -72,7 +72,7 @@ describe('CupedProvider', () => {
     expect(flame.init).not.toHaveBeenCalled();
   });
 
-  it('logs an error if flame.init rejects but still marks initialized', async () => {
+  it('logs an error if flame.init rejects but still marks ready', async () => {
     const { flame } = createStubFlame();
     (flame.init as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -85,7 +85,7 @@ describe('CupedProvider', () => {
     );
 
     await waitFor(() => {
-      expect(values.at(-1)?.initialized).toBe(true);
+      expect(values.at(-1)?.ready).toBe(true);
     });
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();

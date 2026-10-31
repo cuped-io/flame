@@ -129,6 +129,57 @@ describe('SSR with prehydrated', () => {
     expect(html).toContain('loading');
   });
 
+  it('records the edge arm through flame once flame is ready', async () => {
+    const { flame, readMock } = createStubFlame({ assignments: { 'exp-1': variant } });
+    const { getByTestId } = render(
+      <CupedProvider dsn="x" flame={flame} prehydrated={prehydrated}>
+        <Probe id="exp-1" />
+      </CupedProvider>
+    );
+    expect(getByTestId('state').textContent).toBe('green');
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readMock).toHaveBeenCalledWith('exp-1');
+    expect(getByTestId('state').textContent).toBe('green');
+  });
+
+  it('gives control for an experiment the edge answer leaves out, as flame does', () => {
+    const control = makeVariant({ id: 'variant-C', name: 'control', is_control: true });
+    const heldOut: PrehydratedState = {
+      ...prehydrated,
+      experiments: prehydrated.experiments.map((e) => ({ ...e, variants: [control, variant] })),
+      assignments: {},
+    };
+    const results: ReturnType<typeof useExperiment>[] = [];
+    function Capture() {
+      results.push(useExperiment('exp-1'));
+      return null;
+    }
+    const { flame } = createStubFlame({ autoInit: false });
+    render(
+      <CupedProvider dsn="x" flame={flame} prehydrated={heldOut}>
+        <Capture />
+      </CupedProvider>
+    );
+    expect(results[0]).toEqual({ variant: control, isLoading: false });
+  });
+
+  it('answers by slug as well as by id', () => {
+    const withSlug: PrehydratedState = {
+      ...prehydrated,
+      experiments: prehydrated.experiments.map((e) => ({ ...e, slug: 'hero-cta' })),
+    };
+    const { flame } = createStubFlame({ autoInit: false });
+    const { getByTestId } = render(
+      <CupedProvider dsn="x" flame={flame} prehydrated={withSlug}>
+        <Probe id="hero-cta" />
+      </CupedProvider>
+    );
+    expect(getByTestId('state').textContent).toBe('green');
+  });
+
   it('forwards prehydrated to flame.init', async () => {
     const { flame } = createStubFlame();
     render(
@@ -141,8 +192,6 @@ describe('SSR with prehydrated', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(flame.init).toHaveBeenCalledWith(
-      expect.objectContaining({ dsn: 'x', prehydrated })
-    );
+    expect(flame.init).toHaveBeenCalledWith(expect.objectContaining({ dsn: 'x', prehydrated }));
   });
 });

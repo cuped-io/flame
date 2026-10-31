@@ -69,6 +69,24 @@ function VoteButton({ gameId, option }: { gameId: string; option: string }) {
 }
 ```
 
+`useExperiment` and `<Experiment>` take the experiment's slug or id. `variant` is `null` when the visitor sees control.
+
+## Loading limit
+
+`useExperiment` gives the visitor's variant on the first render when flame already knows it: a flame-edge answer passed as `prehydrated`, or flame already ready. A new visitor needs flame to fetch the project's rules file first. Until then `isLoading` is true and `<Experiment>` renders its `fallback`.
+
+The wait has a limit, 200 ms by default. If the limit passes first, the experiment shows control for the rest of the page view, even if the variant arrives later, and the visitor is not counted in it. Set the limit on the provider, in milliseconds. `0` means never wait.
+
+```tsx
+<CupedProvider dsn="https://YOUR_KEY@api.cuped.io" loadingLimitMs={500}>
+  <App />
+</CupedProvider>
+```
+
+## Who is counted
+
+A visitor is counted in an experiment when a `useExperiment` or `<Experiment>` for it renders with a real variant. An experiment that no rendered component asks for is never recorded. Control shown because the loading limit passed is not recorded either.
+
 ## Next.js App Router with zero-flash SSR
 
 For Next.js, run variant resolution at the edge so the first server-rendered HTML already matches the assigned variant — no flash, no hydration mismatch.

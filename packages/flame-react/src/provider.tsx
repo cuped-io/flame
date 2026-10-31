@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   flame as defaultFlame,
   type Flame,
@@ -7,6 +7,9 @@ import {
   type Variant,
 } from '@cuped-io/flame';
 import { CupedContext, type CupedContextValue } from './context';
+
+/** How long `useExperiment` may report `isLoading` by default (flame#61). */
+const DEFAULT_LOADING_LIMIT_MS = 200;
 
 export interface CupedProviderProps extends FlameConfig {
   children: ReactNode;
@@ -17,13 +20,22 @@ export interface CupedProviderProps extends FlameConfig {
    *
    * 1. Renders the correct variant on the very first server render
    *    (no flash, no hydration mismatch).
-   * 2. Forwards the state to `flame.init()` so the SDK skips its
-   *    HTTP fetches.
+   * 2. Forwards the state to `flame.init()`, so flame needs no rules
+   *    file for this visitor.
    *
-   * Without this prop, the provider falls back to the v0.1 behavior:
-   * server renders the control branch, client refetches on mount.
+   * Without this prop, the server render reports `isLoading`, and the
+   * client waits up to `loadingLimitMs` for flame to learn the arms.
    */
   prehydrated?: PrehydratedState;
+
+  /**
+   * How long `useExperiment` may report `isLoading` while flame learns a
+   * new visitor's arms, in milliseconds (flame#61). Default 200. When the limit
+   * passes first, those experiments show control for the rest of the page
+   * view and nothing is recorded, even if the arms arrive later. `0` means
+   * never wait: control at once unless the arm is already known.
+   */
+  loadingLimitMs?: number;
 
   /**
    * Override the underlying flame instance.
@@ -37,19 +49,20 @@ export interface CupedProviderProps extends FlameConfig {
 }
 
 /**
- * Resolve `prehydrated` into a synchronous experimentId → Variant
- * map by joining the assignment list against the experiments list.
+ * The flame-edge answer as a synchronous map from experiment id and slug
+ * to the variant to show. It gives what flame's read gives once ready: the
+ * assigned variant, or control for an experiment the answer leaves out.
  */
-function resolveAssignmentsFromPrehydrated(
-  state: PrehydratedState | undefined
-): Record<string, Variant> {
-  if (!state) return {};
+function edgeVariants(state: PrehydratedState | undefined): Record<string, Variant> | null {
+  if (!state) return null;
   const result: Record<string, Variant> = {};
-  for (const [experimentId, assignment] of Object.entries(state.assignments)) {
-    const experiment = state.experiments.find((e) => e.id === experimentId);
-    if (!experiment || !experiment.variants) continue;
-    const variant = experiment.variants.find((v) => v.id === assignment.variantId);
-    if (variant) result[experimentId] = variant;
+  for (const experiment of state.experiments) {
+    const variants = experiment.variants ?? [];
+    const variantId = state.assignments[experiment.id]?.variantId;
+    const variant = variants.find((v) => v.id === variantId) ?? variants.find((v) => v.is_control);
+    if (!variant) continue;
+    result[experiment.id] = variant;
+    if (experiment.slug) result[experiment.slug] = variant;
   }
   return result;
 }
@@ -75,58 +88,51 @@ function resolveAssignmentsFromPrehydrated(
  * </CupedProvider>
  * ```
  *
- * Without `prehydrated`, the provider is a no-op on the server and
- * components default to the control variant until the client
- * hydrates and `flame.init()` resolves.
+ * Without `prehydrated`, the server render reports `isLoading` (or
+ * control, with `loadingLimitMs={0}`), and the client waits up to
+ * `loadingLimitMs` for flame to learn the visitor's arms.
  */
 export function CupedProvider({
   children,
   flame: flameOverride,
   prehydrated,
+  loadingLimitMs = DEFAULT_LOADING_LIMIT_MS,
   ...flameConfig
 }: CupedProviderProps) {
   const flame = flameOverride ?? defaultFlame;
 
-  // Synchronous map populated from prehydrated. Available on first
-  // render — including server render — so useExperiment can return
-  // the right variant before any effects fire.
-  const initialAssignments = useMemo(
-    () => resolveAssignmentsFromPrehydrated(prehydrated),
-    [prehydrated]
-  );
+  // Available on the first render, including the server render, so
+  // useExperiment can answer before any effect runs.
+  const edge = useMemo(() => edgeVariants(prehydrated), [prehydrated]);
 
-  // With prehydrated state we're effectively initialized from the
-  // start; without it, we defer to flame.isInitialized().
-  const [initialized, setInitialized] = useState(
-    () => Boolean(prehydrated) || flame.isInitialized()
-  );
-  const [assignments, setAssignments] = useState<Record<string, Variant>>(initialAssignments);
-  // Bumped after init resolves so consumers re-evaluate.
-  const [initTick, setInitTick] = useState(0);
+  const [ready, setReady] = useState(() => flame.isInitialized());
+  const [timedOut, setTimedOut] = useState(() => loadingLimitMs <= 0);
+  // Mutated during render by the hooks that give up. Each key is added at
+  // most once and never removed, so a repeated render changes nothing.
+  const gaveUp = useRef(new Set<string>()).current;
+
+  useEffect(() => {
+    if (ready || timedOut) return;
+    const timer = setTimeout(() => setTimedOut(true), loadingLimitMs);
+    return () => clearTimeout(timer);
+  }, [ready, timedOut, loadingLimitMs]);
 
   useEffect(() => {
     let cancelled = false;
 
     if (flame.isInitialized()) {
-      setInitialized(true);
-      setInitTick((t) => t + 1);
-      return () => {
-        cancelled = true;
-      };
+      setReady(true);
+      return;
     }
 
     flame
       .init({ ...flameConfig, prehydrated })
-      .then(() => {
-        if (cancelled) return;
-        setInitialized(true);
-        setInitTick((t) => t + 1);
-      })
       .catch((err: unknown) => {
         console.error('[CupedProvider] flame.init failed:', err);
-        if (cancelled) return;
-        setInitialized(true);
-        setInitTick((t) => t + 1);
+      })
+      .then(() => {
+        // After a failed init, flame's reads answer null: control.
+        if (!cancelled) setReady(true);
       });
 
     return () => {
@@ -135,16 +141,9 @@ export function CupedProvider({
     // Mount-once init — see v0.1 commit message for rationale.
   }, [flame]);
 
-  // Keep the prehydrated map fresh when the prop changes (rare, but
-  // it could happen if the parent re-resolves the cookie on
-  // navigation). React-only state; doesn't re-trigger flame.init.
-  useEffect(() => {
-    setAssignments(initialAssignments);
-  }, [initialAssignments]);
-
   const value = useMemo<CupedContextValue>(
-    () => ({ flame, initialized, initTick, assignments }),
-    [flame, initialized, initTick, assignments]
+    () => ({ flame, ready, edge, timedOut, gaveUp }),
+    [flame, ready, edge, timedOut, gaveUp]
   );
 
   return <CupedContext.Provider value={value}>{children}</CupedContext.Provider>;

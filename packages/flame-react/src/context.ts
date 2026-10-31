@@ -5,26 +5,32 @@ import type { Flame, Variant } from '@cuped-io/flame';
  * Internal context shared between {@link CupedProvider} and the
  * hooks/components in this package.
  *
- * `assignments` is the synchronous variant map, keyed by
- * experiment id. Populated from the provider's `prehydrated` prop
- * on first render (so SSR + hydration produce the right variant
- * without a flash) and re-synced from flame after `init()` resolves.
+ * `ready` turns true once flame's reads answer. From then on a hook
+ * reads its arm from flame, and that read records the exposure
+ * (flame#24).
  *
- * `initTick` increments whenever the underlying flame instance
- * transitions from "initializing" to "initialized" (or is reset).
- * Hook consumers depend on it via `useContext` so React schedules
- * a re-render at the moment assignments become available.
+ * `edge` is the flame-edge answer from the provider's `prehydrated`
+ * prop, keyed by experiment id and slug, or `null` without one. It
+ * answers on the first render, including the server render, before
+ * flame is ready.
+ *
+ * `timedOut` turns true when the loading limit passes before flame is
+ * ready. `gaveUp` holds the experiments that then showed control: they
+ * keep control for the rest of the page view and are never read, so
+ * never recorded.
  */
 export interface CupedContextValue {
   flame: Flame | null;
-  initialized: boolean;
-  initTick: number;
-  assignments: Record<string, Variant>;
+  ready: boolean;
+  edge: Record<string, Variant> | null;
+  timedOut: boolean;
+  gaveUp: Set<string>;
 }
 
 export const CupedContext = createContext<CupedContextValue>({
   flame: null,
-  initialized: false,
-  initTick: 0,
-  assignments: {},
+  ready: false,
+  edge: null,
+  timedOut: false,
+  gaveUp: new Set(),
 });

@@ -1,15 +1,15 @@
 import type { Variant } from '@cuped-io/flame';
 
 /**
- * Result of `useExperiment(experimentId)`.
+ * Result of `useExperiment(key)`.
  *
- * `variant` is the full {@link Variant} object (id, name, is_control,
- * changes) once the SDK has resolved an assignment, or `null` while
- * the SDK is still initializing or if no assignment exists.
+ * `variant` is the variant to show (id, name, is_control), or `null`
+ * for control: flame does not know the experiment, the visitor gets
+ * control, or the loading limit passed first.
  *
- * `isLoading` is true until the underlying flame instance has
- * finished `init()`. Use it to render a skeleton or default content
- * during the initial fetch.
+ * `isLoading` is true only while flame learns a new visitor's arm, and
+ * never longer than the provider's `loadingLimitMs` (default 200 ms).
+ * Use it to render a skeleton or default content meanwhile.
  */
 export interface UseExperimentResult {
   variant: Variant | null;

@@ -3,7 +3,7 @@ import { useExperiment } from './useExperiment';
 import type { VariantsMap } from './types';
 
 export interface ExperimentProps {
-  /** The experiment ID to look up. */
+  /** The experiment's slug or id. */
   id: string;
   /**
    * Map of variant *name* → element to render.
@@ -13,9 +13,10 @@ export interface ExperimentProps {
    */
   variants: VariantsMap;
   /**
-   * What to render while the SDK is still initializing. Defaults to
-   * `variants.control` if present, else `null`. Once loaded, a user in
-   * no variant (held out, or not enrolled) gets `variants.control`.
+   * What to render while flame learns a new visitor's arm, at most the
+   * provider's `loadingLimitMs`. Defaults to `variants.control` if
+   * present, else `null`. After the limit, or for a user in no variant
+   * (held out, or not enrolled), it renders `variants.control`.
    */
   fallback?: ReactNode;
 }
@@ -33,7 +34,9 @@ export interface ExperimentProps {
  * Picks the entry from `variants` whose key matches the assigned
  * variant's name. While loading, renders `fallback` if given,
  * otherwise the `control` entry, otherwise null. A user in no variant
- * (held out, or not enrolled) renders the `control` entry.
+ * (held out, or not enrolled) renders the `control` entry, as does
+ * every visitor once the loading limit passes. Rendering it is what
+ * counts the visitor in the experiment, as with `useExperiment`.
  */
 export function Experiment({ id, variants, fallback }: ExperimentProps) {
   const { variant, isLoading } = useExperiment(id);

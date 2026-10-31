@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, act } from '@testing-library/react';
 import { CupedProvider } from './provider';
 import { Experiment } from './Experiment';
 import { createStubFlame, makeVariant } from './test-utils';
@@ -45,7 +45,10 @@ describe('<Experiment>', () => {
     const { flame } = createStubFlame({ autoInit: false });
     const { getByText } = render(
       <CupedProvider dsn="x" flame={flame}>
-        <Experiment id="hero-cta" variants={{ control: <span>control text</span>, green: <span>green text</span> }} />
+        <Experiment
+          id="hero-cta"
+          variants={{ control: <span>control text</span>, green: <span>green text</span> }}
+        />
       </CupedProvider>
     );
     expect(getByText('control text')).toBeTruthy();
@@ -86,6 +89,48 @@ describe('<Experiment>', () => {
     );
     expect(await findByText('original')).toBeTruthy();
     expect(queryByText('loading...')).toBeNull();
+  });
+
+  it('renders control, not the fallback, once the loading limit passes', () => {
+    vi.useFakeTimers();
+    try {
+      const { flame } = createStubFlame({ autoInit: false });
+      const { getByText, queryByText } = render(
+        <CupedProvider dsn="x" flame={flame}>
+          <Experiment
+            id="hero-cta"
+            variants={{ control: <span>original</span>, green: <span>green</span> }}
+            fallback={<span>loading...</span>}
+          />
+        </CupedProvider>
+      );
+      expect(getByText('loading...')).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(getByText('original')).toBeTruthy();
+      expect(queryByText('loading...')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads, and so records, only the experiment it renders', async () => {
+    const { flame, readMock } = createStubFlame({
+      assignments: {
+        'hero-cta': makeVariant({ name: 'green', is_control: false }),
+        'footer-cta': makeVariant({ name: 'green', is_control: false }),
+      },
+    });
+    const { findByText } = render(
+      <CupedProvider dsn="x" flame={flame}>
+        <Experiment id="hero-cta" variants={{ green: <span>green</span> }} />
+      </CupedProvider>
+    );
+    expect(await findByText('green')).toBeTruthy();
+    expect(readMock).toHaveBeenCalledWith('hero-cta');
+    expect(readMock).not.toHaveBeenCalledWith('footer-cta');
   });
 
   it('renders null when neither fallback nor control is provided and loading', () => {
