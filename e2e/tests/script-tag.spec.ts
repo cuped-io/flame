@@ -2,12 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { resetEvents, getRecordedEvents, flushBeacons } from './helpers';
 // @ts-expect-error -- untyped .mjs fixture module
-import {
-  PORTS,
-  PROMOTED_CONTRACT,
-  RULES,
-  SCRIPT_TAG_EXPERIMENT,
-} from '../fixtures/experiments.mjs';
+import { PORTS, PROMOTED, RULES, SCRIPT_TAG_EXPERIMENT } from '../fixtures/experiments.mjs';
 
 const PAGE = 'http://localhost:8789/examples/script-tag/index.html';
 const SLUG: string = SCRIPT_TAG_EXPERIMENT.slug;
@@ -49,8 +44,7 @@ const eventTypes = async (request: Parameters<typeof getRecordedEvents>[0]) =>
 
 /** The rules file with a promoted winner added, as ember serves one (ADR 0039). */
 function rulesWithPromoted() {
-  const { id, slug, url_pattern, winner_promoted_at, winner } = PROMOTED_CONTRACT;
-  return { ...RULES, promoted: [{ id, slug, url_pattern, winner_promoted_at, winner }] };
+  return { ...RULES, promoted: [PROMOTED] };
 }
 
 // --- flame never changes the page (flame#63) -------------------------
@@ -111,7 +105,6 @@ const CONFIGURATIONS: Configuration[] = [
     name: 'the removed data-reapply and data-wait-for-hydration attributes',
     attributes: 'data-reapply="true" data-wait-for-hydration="true"',
   },
-  // The contract's winner still carries a `changes` payload.
   { name: 'a promoted winner', rules: rulesWithPromoted },
   {
     name: 'a visitor in an active Holdout',
@@ -148,7 +141,7 @@ for (const config of CONFIGURATIONS) {
 
     // Everything a page does with flame: reads, goals, a client-side navigation.
     await read(page, SLUG);
-    await read(page, PROMOTED_CONTRACT.slug);
+    await read(page, PROMOTED.slug);
     await page.evaluate(
       (slug) => (window as unknown as FlameWindow).flame.isInVariant(slug, 'treatment'),
       SLUG
@@ -242,14 +235,13 @@ test('fires a custom track() event on button click', async ({ page, request }) =
   expect(event?.metadata?.source).toBe('script-tag-example');
 });
 
-// --- goals are the page's track() calls (flame#60, cuped-io/ember#171) ---
+// --- goals are the page's track() calls (flame#60) ---
 //
-// The mock serves the shared contract payload (`CONTRACT_GOALS` — the
-// byte-identical twin of ember's golden fixture). flame registers no DOM
-// listener for any of it: the example page fires each goal with
-// `flame.track(goal.name)`. That name is what the backend matches
-// conversions on, so these specs assert that each interaction sends exactly
-// one event by that name, carrying the arm, and that nothing else does.
+// ember serves flame no goals: flame registers no DOM listener, and the
+// example page fires each goal with `flame.track(goal.name)`. That name is
+// what the backend matches conversions on, so these specs assert that each
+// interaction sends exactly one event by that name, carrying the arm, and
+// that nothing else does.
 
 const GOAL_INTERACTIONS: [string, string][] = [
   ['cart_add_clicked', '.add-to-cart-cta'],
@@ -283,7 +275,7 @@ test('a click or submit the page does not track sends no goal event', async ({ p
   await ready(page);
 
   // Strip the page's own track() calls: what is left is what flame alone does
-  // with a click and a submit on the contract's selectors.
+  // with a click and a submit on the goal selectors.
   await page.evaluate(() => {
     for (const el of document.querySelectorAll('#goal-targets-section [onclick]')) {
       el.removeAttribute('onclick');
@@ -319,7 +311,7 @@ test('a promoted winner is read, but never recorded or carried', async ({ page, 
   await page.goto(PAGE);
   await ready(page);
 
-  expect(await read(page, PROMOTED_CONTRACT.slug)).toBe(PROMOTED_CONTRACT.winner.id);
+  expect(await read(page, PROMOTED.slug)).toBe(PROMOTED.winner.id);
   await read(page, SLUG);
   await page.getByRole('button', { name: 'Fire event' }).click();
   await flushBeacons(page);

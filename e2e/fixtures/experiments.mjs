@@ -8,58 +8,25 @@
  * `node mock-server/api.mjs` can import it directly.
  */
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
 /**
- * Goals exactly as cuped's `/experiments/active` serves them.
+ * One `promoted` entry of the rules file (ember ADR 0039): a concluded
+ * experiment whose winner every visitor not held out should see.
  *
- * This file is a **golden instance** with a byte-identical twin in the
- * ember repo (`crates/ember-core/tests/contracts/experiments_active_goals.json`),
- * where a test asserts the endpoint emits precisely this for a known
- * goal configuration. Here it goes the other way: the mock API serves
- * it, and `tests/script-tag.spec.ts` drives real Chromium interactions
- * against `examples/script-tag/index.html` to prove the SDK turns the
- * page's `track()` calls into events named after these goals, and that it
- * fires none of them itself (flame#60).
- *
- * Why the pairing exists: cuped-io/ember#171. Goals moved to
- * project-scoped tables server-side, the SDK payload kept serializing a
- * legacy column, and browsers got `"goals": null` — every
- * dashboard-created click/submit goal recorded zero conversions,
- * silently. Both suites were green throughout: ember asserted the
- * endpoint returned experiments, and this suite asserted auto-tracking
- * worked — against a fixture that carried `goals: []`. Nothing pinned
- * the shape they exchanged.
- *
- * Read from disk rather than inlined so the twin can be diffed byte for
- * byte. Editing it means editing both copies, and the selectors below
- * must keep naming the elements that call `track()` in the script-tag
- * example page.
- */
-export const CONTRACT_GOALS = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL('./experiments-active-goals.contract.json', import.meta.url)),
-    'utf8'
-  )
-);
-
-/**
- * One `promoted[]` entry exactly as cuped's `/experiments/active` serves
- * it (cuped-io/ember#300, ADR 0039): a concluded experiment whose winner
- * every visitor not held out should see. Byte-identical twin of ember's
- * `crates/ember-core/tests/contracts/experiments_active_promoted.json`,
- * paired the same way as `CONTRACT_GOALS`.
- *
- * Not in the default responses. Specs that want it splice it in with
+ * Not in the default rules file. Specs that want it splice it in with
  * `page.route`.
  */
-export const PROMOTED_CONTRACT = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL('./experiments-active-promoted.contract.json', import.meta.url)),
-    'utf8'
-  )
-);
+export const PROMOTED = {
+  id: '00000000-0000-4000-8000-000000000300',
+  slug: 'promoted-winner',
+  url_pattern: null,
+  winner_promoted_at: '2026-10-10T12:00:00Z',
+  winner: {
+    id: '00000000-0000-4000-8000-000000000302',
+    name: 'Treatment',
+    is_control: false,
+    weight: 1,
+  },
+};
 
 /** 32-char hex DSN key. `parseDsn` rejects anything else. */
 export const TEST_API_KEY = '0123456789abcdef0123456789abcdef';
@@ -77,10 +44,6 @@ export const TEST_DSN = `http://${TEST_API_KEY}@localhost:${PORTS.api}`;
 /**
  * Script-tag experiment. flame changes nothing on the page for it
  * (flame#63): the specs read it with `flame.getVariant`.
- *
- * Its `goals` are the shared contract instance — the same JSON cuped
- * emits — so the goal specs exercise the real payload rather
- * than a shape invented here. See `CONTRACT_GOALS`.
  */
 export const SCRIPT_TAG_EXPERIMENT = {
   id: 'exp_script_tag',
@@ -91,7 +54,6 @@ export const SCRIPT_TAG_EXPERIMENT = {
   status: 'running',
   created_at: '2026-01-01T00:00:00.000Z',
   updated_at: '2026-01-01T00:00:00.000Z',
-  goals: CONTRACT_GOALS,
   variants: [
     {
       id: 'var_script_control',
@@ -128,7 +90,6 @@ export const REACT_EXPERIMENT = {
   status: 'running',
   created_at: '2026-01-01T00:00:00.000Z',
   updated_at: '2026-01-01T00:00:00.000Z',
-  goals: [],
   variants: [
     {
       id: 'var_react_control',
@@ -154,19 +115,9 @@ export const REACT_EXPERIMENT = {
 export const EXPERIMENTS = [SCRIPT_TAG_EXPERIMENT, REACT_EXPERIMENT];
 
 /**
- * Deterministic assignment: everyone gets the treatment variant. The
- * suite asserts a known outcome, so we don't hash the user id.
- */
-export function treatmentVariantFor(experimentId) {
-  const exp = EXPERIMENTS.find((e) => e.id === experimentId);
-  if (!exp) return null;
-  return exp.variants.find((v) => v.name === 'treatment') ?? null;
-}
-
-/**
  * The project's rules file as ember serves it at `GET /{api_key}/rules`
  * (ember#309), from `EXPERIMENTS`. Control weighs 0, so every visitor's
- * local pick is treatment, the same arm the other endpoints answer.
+ * pick is treatment.
  */
 export const RULES = {
   version: 1,

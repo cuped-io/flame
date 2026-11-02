@@ -9,13 +9,56 @@ import type {
  * What became of a batch sent with {@link ApiClient.sendEvents}.
  *
  * - `sent`: ember accepted it.
- * - `retry`: it may succeed later (network error, 5xx, 408, 429).
- * - `refused`: it never will (any other 4xx: 400, 401, 402, 403, ...).
+ * - `retry`: it may succeed later (network error, a retryable `code`, or,
+ *   with no `code` flame knows, a 5xx, 408 or 429).
+ * - `refused`: it never will (any other refusal).
  */
 export type EventDelivery = 'sent' | 'retry' | 'refused';
 
-/** Whether an answer from ember is worth sending the same batch again. */
-function isRetryable(status: number): boolean {
+/**
+ * Every `code` ember puts in an SDK route's refusal (ember#364), and whether
+ * sending the same request again can help. Mirrors
+ * `contracts/sdk-refusals.contract.json`.
+ */
+export const REFUSAL_RETRIES = {
+  invalid_api_key: false,
+  publishable_key_required: false,
+  api_key_not_project_scoped: false,
+  rate_limited: true,
+  invalid_body: false,
+  invalid_event: false,
+  payload_too_large: false,
+  origin_not_allowed: false,
+  domain_claim_conflict: false,
+  daily_cap_exceeded: false,
+  quota_exceeded: false,
+  workspace_archived: false,
+  ingest_unavailable: true,
+} satisfies Record<string, boolean>;
+
+/** A `code` ember puts in an SDK route's refusal. */
+export type RefusalCode = keyof typeof REFUSAL_RETRIES;
+
+/** The `code` in a refusal's JSON body, if it is one flame knows. */
+function refusalCode(body: string): RefusalCode | undefined {
+  try {
+    const code = (JSON.parse(body) as { code?: unknown } | null)?.code;
+    return typeof code === 'string' && Object.prototype.hasOwnProperty.call(REFUSAL_RETRIES, code)
+      ? (code as RefusalCode)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a refusal from ember is worth sending the same batch again. Goes by
+ * its `code`, never its prose. With no `code` flame knows (a server fault, or
+ * a proxy in front of ember), goes by the status.
+ */
+function isRetryable(status: number, body: string): boolean {
+  const code = refusalCode(body);
+  if (code) return REFUSAL_RETRIES[code];
   return status >= 500 || status === 408 || status === 429;
 }
 
@@ -188,15 +231,17 @@ export class ApiClient {
         return 'retry';
       }
 
+      // Including the one refusal with no status: ember answers 204 to a
+      // workspace that is archived, and drops the batch (spark#68).
       if (response.ok) {
         return 'sent';
       }
-      if (isRetryable(response.status)) {
+      const body = await response.text().catch(() => '');
+      if (isRetryable(response.status, body)) {
         this.log(`Events not delivered (${response.status}), will retry`);
         return 'retry';
       }
       if (this.debug) {
-        const body = await response.text().catch(() => '');
         const noun = events.length === 1 ? 'event' : 'events';
         this.log(`ember refused ${events.length} ${noun} (${response.status}), dropping:`, body);
       }

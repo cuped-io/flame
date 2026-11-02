@@ -1,0 +1,21 @@
+{
+  "description": "Every refusal an SDK route answers (ember#364). The body is JSON with a stable `code`; branch on it, never on the prose. A 5xx without a `code` is a server fault: retry with backoff.",
+  "exceptions": [
+    "POST /events to an archived workspace answers 204 and drops the batch (spark#68). It is the one refusal with no status."
+  ],
+  "refusals": [
+    { "code": "invalid_api_key", "status": 401, "routes": ["*"], "retry": false },
+    { "code": "publishable_key_required", "status": 403, "routes": ["*"], "retry": false },
+    { "code": "api_key_not_project_scoped", "status": 403, "routes": ["*"], "retry": false },
+    { "code": "rate_limited", "status": 429, "routes": ["*"], "retry": true },
+    { "code": "invalid_body", "status": 400, "routes": ["POST /events", "POST /identity/link"], "retry": false },
+    { "code": "invalid_event", "status": 400, "routes": ["POST /events"], "retry": false },
+    { "code": "payload_too_large", "status": 413, "routes": ["POST /events"], "retry": false },
+    { "code": "origin_not_allowed", "status": 403, "routes": ["POST /events"], "retry": false },
+    { "code": "domain_claim_conflict", "status": 402, "routes": ["POST /events"], "retry": false },
+    { "code": "daily_cap_exceeded", "status": 402, "routes": ["POST /events", "POST /identity/link"], "retry": false },
+    { "code": "quota_exceeded", "status": 402, "routes": ["POST /events", "POST /identity/link"], "retry": false },
+    { "code": "workspace_archived", "status": 403, "routes": ["POST /identity/link"], "retry": false },
+    { "code": "ingest_unavailable", "status": 503, "routes": ["POST /events"], "retry": true }
+  ]
+}

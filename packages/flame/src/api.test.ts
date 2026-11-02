@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { ApiClient } from './api';
+import { ApiClient, REFUSAL_RETRIES } from './api';
+import refusals from './contracts/sdk-refusals.contract.json';
 
 // jsdom's Blob has no .text(); read it via FileReader instead.
 function readBlob(blob: Blob): Promise<string> {
@@ -313,6 +314,41 @@ describe('ApiClient', () => {
         `ember refused 1 event (${status}), dropping:`,
         body
       );
+    });
+
+    // `contracts/sdk-refusals.contract.json` is a byte-identical copy of
+    // ember's `crates/ember-core/tests/contracts/sdk_refusals.json` (ember#364),
+    // which ember checks in `sdk_refusals_match_the_flame_contract`.
+    it('knows every refusal code ember lists, and which are worth retrying', () => {
+      const listed = Object.fromEntries(refusals.refusals.map((r) => [r.code, r.retry]));
+      expect(REFUSAL_RETRIES).toEqual(listed);
+      expect(REFUSAL_RETRIES.rate_limited).toBe(true);
+      expect(REFUSAL_RETRIES.ingest_unavailable).toBe(true);
+    });
+
+    it.each(refusals.refusals)(
+      'reports a $status $code as retry: $retry',
+      async ({ code, status, retry }) => {
+        fetchMock.mockResolvedValueOnce({
+          ok: false,
+          status,
+          text: () => Promise.resolve(JSON.stringify({ error: 'any prose', code })),
+        });
+        const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+        await expect(client.sendEvents(events)).resolves.toBe(retry ? 'retry' : 'refused');
+      }
+    );
+
+    it('goes by the code, not the status, when ember sends one', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: () => Promise.resolve('{"error":"no","code":"invalid_api_key"}'),
+      });
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+      await expect(client.sendEvents(events)).resolves.toBe('refused');
     });
 
     it('says nothing about a refusal outside debug mode', async () => {

@@ -2,10 +2,7 @@
  * Mock cuped API for the flame e2e suite.
  *
  * Implements the handful of endpoints the SDK + edge middleware hit:
- *   GET  /:key/rules                 (flame#24: the rules file flame picks from)
- *   GET  /:key/experiments/active    (flame-edge)
- *   POST /:key/evaluate              (flame-edge: every arm, no enrolment)
- *   POST /:key/experiments/:id/assign (older flame and flame-edge builds)
+ *   GET  /:key/rules                 (flame#24: the rules file flame and flame-edge pick from)
  *   POST /:key/identity/link
  *   POST /:key/events
  *
@@ -14,21 +11,13 @@
  *   GET  /_test/events   -> recorded events (newest last)
  *   POST /_test/reset    -> clear recorded events
  *
- * Deterministic by design: everyone is assigned the treatment variant
- * (see `treatmentVariantFor`). The promoted contract experiment
- * answers with its winner. Reachable by both the browser
- * (script-tag example, cross-origin) and the Next.js server (edge
- * middleware, same-process fetch), so CORS is wide open.
+ * Deterministic by design: the rules file gives everyone the treatment
+ * variant. A refusal carries ember's `code` (ember#364). Reachable by
+ * both the browser (script-tag example, cross-origin) and the Next.js
+ * server (edge middleware, same-process fetch), so CORS is wide open.
  */
 import { createServer } from 'node:http';
-import {
-  EXPERIMENTS,
-  PORTS,
-  PROMOTED_CONTRACT,
-  RULES,
-  TEST_API_KEY,
-  treatmentVariantFor,
-} from '../fixtures/experiments.mjs';
+import { PORTS, RULES, TEST_API_KEY } from '../fixtures/experiments.mjs';
 
 /** In-memory sink for every event the SDK POSTs to `/events`. */
 const recordedEvents = [];
@@ -90,73 +79,13 @@ const server = createServer(async (req, res) => {
   }
   const [, key, rest] = keyed;
   if (key !== TEST_API_KEY) {
-    send(res, 401, { error: 'bad api key' });
+    send(res, 401, { error: 'bad api key', code: 'invalid_api_key' });
     return;
   }
 
   // GET /:key/rules (ember#309)
   if (rest === '/rules' && method === 'GET') {
     send(res, 200, RULES);
-    return;
-  }
-
-  // GET /:key/experiments/active
-  if (rest === '/experiments/active' && method === 'GET') {
-    send(res, 200, { experiments: EXPERIMENTS });
-    return;
-  }
-
-  // POST /:key/evaluate (ember ADR 0041): the arm for every running
-  // experiment and promoted winner, in one answer. Enrols nobody; flame
-  // records what it delivers as a $assignment event.
-  if (rest === '/evaluate' && method === 'POST') {
-    const evaluation = (experimentId, variant) => ({
-      experiment_id: experimentId,
-      variant_id: variant.id,
-      variant_name: variant.name,
-      is_control: variant.is_control,
-      resolution: 'assigned',
-    });
-    const evaluations = EXPERIMENTS.flatMap((e) => {
-      const variant = treatmentVariantFor(e.id);
-      return variant ? [evaluation(e.id, variant)] : [];
-    });
-    evaluations.push(evaluation(PROMOTED_CONTRACT.id, PROMOTED_CONTRACT.winner));
-    send(res, 200, { evaluations });
-    return;
-  }
-
-  // POST /:key/experiments/:id/assign
-  const assignMatch = rest.match(/^\/experiments\/([^/]+)\/assign$/);
-  if (assignMatch && method === 'POST') {
-    const experimentId = assignMatch[1];
-    // A promoted experiment answers with its winner and writes no
-    // assignment row, as ember's promotion short-circuit does.
-    if (experimentId === PROMOTED_CONTRACT.id) {
-      const { winner } = PROMOTED_CONTRACT;
-      send(res, 200, {
-        assignment_id: null,
-        experiment_id: experimentId,
-        variant_id: winner.id,
-        variant_name: winner.name,
-        is_control: winner.is_control,
-        assigned_at: null,
-      });
-      return;
-    }
-    const variant = treatmentVariantFor(experimentId);
-    if (!variant) {
-      send(res, 404, { error: `unknown experiment ${experimentId}` });
-      return;
-    }
-    send(res, 200, {
-      assignment_id: `asn_${experimentId}`,
-      experiment_id: experimentId,
-      variant_id: variant.id,
-      variant_name: variant.name,
-      is_control: variant.is_control,
-      assigned_at: new Date().toISOString(),
-    });
     return;
   }
 
@@ -185,7 +114,22 @@ const server = createServer(async (req, res) => {
           )
       );
       if (bad !== -1) {
-        send(res, 400, { error: `events[${bad}]: $assignment: malformed metadata` });
+        send(res, 400, {
+          error: `events[${bad}]: $assignment: malformed metadata`,
+          code: 'invalid_event',
+        });
+        return;
+      }
+      // As ember does: an assignment with no variant refuses the envelope too.
+      // A held-out visitor's events carry no entry for the experiment.
+      const unassigned = events.findIndex((e) =>
+        e?.experiment_assignments?.some((a) => typeof a?.variant_id !== 'string')
+      );
+      if (unassigned !== -1) {
+        send(res, 400, {
+          error: `events[${unassigned}]: experiment_assignments: variant_id must be a string`,
+          code: 'invalid_body',
+        });
         return;
       }
       recordedEvents.push(...events);
