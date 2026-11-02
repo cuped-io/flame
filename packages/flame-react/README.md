@@ -83,6 +83,8 @@ The wait has a limit, 200 ms by default. If the limit passes first, the experime
 </CupedProvider>
 ```
 
+Each request flame makes to cuped also has a time limit: 10 seconds by default. Set it with `requestTimeoutMs`, which the provider passes to flame. If cuped never answers, the request stops at this limit and `isLoading` becomes false, even when `loadingLimitMs` is larger.
+
 ## Who is counted
 
 A visitor is counted in an experiment when a `useExperiment` or `<Experiment>` for it renders with a real variant. An experiment that no rendered component asks for is never recorded. Control shown because the loading limit passed is not recorded either.

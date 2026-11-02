@@ -71,6 +71,11 @@ flame.track('vote_cast', { game_id: 'g42', option: 'controller' });
 - **Ready.** `flame.ready` is a promise that resolves once reads answer, and flame dispatches a `flame:ready` event on `window` at the same moment (again when a consent grant starts flame). Wait on either instead of polling `isInitialized()`. If the rules file cannot be fetched and there is no stored copy, flame is still ready and every read answers control.
 - **Exposure on read.** A visitor is counted in an experiment only when your code reads it: the first `getVariant`, `getAssignedVariantInfo` or `isInVariant` call for that experiment records a `$assignment` with the page path, once per visitor and variant. An experiment your page never reads is never recorded. A read before flame is ready returns `null` (show control) and records nothing. Control given to a Holdout member, a promoted winner, and control on a page outside the experiment's URL pattern are never recorded.
 - **Events.** The pageview goes out as soon as flame starts. `track()` events carry only the variants recorded so far, including those recorded on earlier visits.
+- **Time limit.** Each request to cuped stops after 10 seconds without an answer. A request that stops counts as failed. If it was the rules file and there is no stored copy, flame is ready and every read answers control. If it was a batch of events, flame keeps the batch and sends it again, as after a network error. Change the limit in milliseconds with `requestTimeoutMs`:
+
+  ```ts
+  await flame.init({ dsn: 'https://YOUR_KEY@api.cuped.io', requestTimeoutMs: 5000 });
+  ```
 
 The SDK POSTs every event to `POST /{api_key}/events` as the array
 envelope `{ "events": [ … ] }` (a single event is an array of one).

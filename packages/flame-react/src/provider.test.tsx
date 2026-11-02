@@ -1,9 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { CupedProvider } from './provider';
 import { CupedContext, type CupedContextValue } from './context';
 import { useContext } from 'react';
 import { createStubFlame } from './test-utils';
+import { useExperiment } from './useExperiment';
+import { Flame } from '@cuped-io/flame';
 
 function ContextProbe({ onValue }: { onValue: (v: CupedContextValue) => void }) {
   const value = useContext(CupedContext);
@@ -89,5 +91,51 @@ describe('CupedProvider', () => {
     });
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+describe('CupedProvider when ember never answers (flame#58)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it('stops loading once the request limit passes, and shows control', async () => {
+    // Like a real fetch: pending until its signal aborts.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise((_, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          })
+      )
+    );
+    const flame = new Flame();
+    function Probe() {
+      const { variant, isLoading } = useExperiment('exp-1');
+      return (
+        <span data-testid="state">{isLoading ? 'loading' : (variant?.name ?? 'control')}</span>
+      );
+    }
+
+    const { getByTestId } = render(
+      // A render limit far past the request limit: only the request limit can end loading.
+      <CupedProvider
+        dsn="https://0123456789abcdef0123456789abcdef@api.example.com"
+        flame={flame}
+        enableBatching={false}
+        requestTimeoutMs={50}
+        loadingLimitMs={60_000}
+      >
+        <Probe />
+      </CupedProvider>
+    );
+    expect(getByTestId('state').textContent).toBe('loading');
+
+    await waitFor(() => expect(getByTestId('state').textContent).toBe('control'), {
+      timeout: 1000,
+    });
+    flame.reset();
   });
 });

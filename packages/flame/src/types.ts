@@ -28,6 +28,13 @@ export interface FlameConfig {
   /** Time-to-live in milliseconds for offline events (default: 86400000 = 24 hours) */
   offlineTtlMs?: number;
   /**
+   * Longest a request to ember may take, in milliseconds (default: 10000;
+   * flame#58). A request that runs out counts as failed: with no rules file
+   * reads answer control and init completes, and an event batch is kept and
+   * sent again.
+   */
+  requestTimeoutMs?: number;
+  /**
    * Wait for the visitor's consent before doing anything (flame#18): no ID,
    * no storage, no network, original page, until `flame.consent(true)`.
    * Script tag: `data-consent="required"`.

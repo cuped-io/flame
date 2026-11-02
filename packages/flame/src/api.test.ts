@@ -54,6 +54,7 @@ describe('ApiClient', () => {
         method: 'GET',
         headers: undefined,
         body: undefined,
+        signal: expect.any(AbortSignal),
       });
     });
 
@@ -264,6 +265,7 @@ describe('ApiClient', () => {
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify({ events }),
         keepalive: true,
+        signal: expect.any(AbortSignal),
       });
     });
 
@@ -277,6 +279,19 @@ describe('ApiClient', () => {
     it('reports a network error as worth retrying', async () => {
       fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
       const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io');
+
+      await expect(client.sendEvents(events)).resolves.toBe('retry');
+    });
+
+    it('reports a request ember never answers as worth retrying, once the limit passes', async () => {
+      // Like a real fetch: pending until its signal aborts.
+      fetchMock.mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise((_, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          })
+      );
+      const client = new ApiClient('pk_live_abc123', 'https://api.cuped.io', false, 20);
 
       await expect(client.sendEvents(events)).resolves.toBe('retry');
     });

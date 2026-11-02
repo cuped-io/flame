@@ -136,7 +136,12 @@ class Flame {
     // Parse the DSN and create client
     const parsed = parseDsn(config.dsn);
     this.apiKey = parsed.apiKey;
-    this.apiClient = new ApiClient(parsed.apiKey, parsed.apiUrl, config.debug);
+    this.apiClient = new ApiClient(
+      parsed.apiKey,
+      parsed.apiUrl,
+      config.debug,
+      config.requestTimeoutMs
+    );
     this.log('Initialized', { apiUrl: parsed.apiUrl });
 
     // Before consent, nothing: no ID, no storage, no network (flame#18).

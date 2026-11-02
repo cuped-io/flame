@@ -48,7 +48,8 @@ const pageviews = () => sent.filter((e) => e.event_type === 'pageview');
 
 /**
  * `/rules` answers with `rules` (a status number: that error), once `gate`
- * resolves. Every event sent lands in `sent`, every request URL in `requests`.
+ * resolves. Like a real fetch, an abort while it waits rejects it. Every event
+ * sent lands in `sent`, every request URL in `requests`.
  */
 function stubApi(rules: RulesFile | number = rulesFile(), gate?: Promise<void>) {
   vi.stubGlobal(
@@ -61,7 +62,7 @@ function stubApi(rules: RulesFile | number = rulesFile(), gate?: Promise<void>) 
         return new Response(null, { status: 204 });
       }
       if (url === `https://example.com/${API_KEY}/rules`) {
-        await gate;
+        await Promise.race([gate, aborted(init?.signal)]);
         return typeof rules === 'number'
           ? new Response('nope', { status: rules })
           : new Response(JSON.stringify(rules), { status: 200 });
@@ -69,6 +70,13 @@ function stubApi(rules: RulesFile | number = rulesFile(), gate?: Promise<void>) 
       return new Response('unexpected', { status: 404 });
     })
   );
+}
+
+/** Rejects as fetch does when `signal` aborts; never settles without one. */
+function aborted(signal?: AbortSignal | null): Promise<never> {
+  return new Promise((_, reject) => {
+    signal?.addEventListener('abort', () => reject(signal.reason));
+  });
 }
 
 const started: Flame[] = [];
@@ -263,6 +271,18 @@ describe('an unreachable rules file with no stored copy', () => {
     expect(flame.isInitialized()).toBe(true);
     expect(flame.getVariant(EXP)).toBeNull();
     await vi.waitFor(() => expect(pageviews()).toHaveLength(1));
+    expect(records()).toEqual([]);
+  });
+
+  it('when ember never answers, init completes within the request limit, with control', async () => {
+    stubApi(rulesFile(), new Promise(() => {}));
+    const flame = fresh();
+    const begun = Date.now();
+    await flame.init({ dsn: DSN, enableBatching: false, requestTimeoutMs: 50 });
+    expect(Date.now() - begun).toBeLessThan(50 + 500);
+    expect(flame.isInitialized()).toBe(true);
+    expect(flame.getVariant(EXP)).toBeNull();
+    await new Promise((r) => setTimeout(r, 10));
     expect(records()).toEqual([]);
   });
 

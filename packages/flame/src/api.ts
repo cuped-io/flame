@@ -20,6 +20,12 @@ function isRetryable(status: number): boolean {
 }
 
 /**
+ * Longest a request to ember may take by default, in milliseconds (flame#58).
+ * The same as flame-edge's limit on its rules fetch.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
  * API client for communicating with the cuped API
  *
  * Uses DSN mode where the API key is included in the URL path (/{api_key}/endpoint)
@@ -28,6 +34,7 @@ export class ApiClient {
   private apiUrl: string;
   private apiKey: string;
   private debug: boolean;
+  private timeoutMs: number;
 
   /**
    * Create an API client
@@ -35,11 +42,18 @@ export class ApiClient {
    * @param apiKey - API key for authentication (included in URL path)
    * @param apiUrl - API base URL
    * @param debug - Enable debug logging
+   * @param timeoutMs - Longest a request may take before it is aborted
    */
-  constructor(apiKey: string, apiUrl: string, debug = false) {
+  constructor(
+    apiKey: string,
+    apiUrl: string,
+    debug = false,
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+  ) {
     this.apiKey = apiKey;
     this.apiUrl = apiUrl;
     this.debug = debug;
+    this.timeoutMs = timeoutMs;
   }
 
   private log(...args: unknown[]) {
@@ -56,33 +70,53 @@ export class ApiClient {
     return `/${this.apiKey}${path}`;
   }
 
+  /**
+   * A signal that aborts once the time limit passes (flame#58), so a server
+   * that never answers fails the request instead of holding it forever.
+   * `clear` stops the timer once the answer, body included, is read.
+   */
+  private timeLimit(): { signal: AbortSignal; clear: () => void } {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error(`Request timed out after ${this.timeoutMs} ms`)),
+      this.timeoutMs
+    );
+    return { signal: controller.signal, clear: () => clearTimeout(timer) };
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const fullPath = this.buildPath(path);
     const url = `${this.apiUrl}${fullPath}`;
     this.log(`${method} ${url}`, body);
 
-    // A GET sends no Content-Type, so the browser asks no CORS preflight and
-    // the rules file costs one request.
-    const response = await fetch(url, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    const limit = this.timeLimit();
+    try {
+      // A GET sends no Content-Type, so the browser asks no CORS preflight and
+      // the rules file costs one request.
+      const response = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: limit.signal,
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`API request failed: ${response.status} ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`API request failed: ${response.status} ${error}`);
+      }
+
+      // Handle 201 Created, 204 No Content, and other success codes that may have no body
+      const text = await response.text();
+      if (!text) {
+        return {} as T;
+      }
+
+      const data = JSON.parse(text);
+      this.log('Response:', data);
+      return data as T;
+    } finally {
+      limit.clear();
     }
-
-    // Handle 201 Created, 204 No Content, and other success codes that may have no body
-    const text = await response.text();
-    if (!text) {
-      return {} as T;
-    }
-
-    const data = JSON.parse(text);
-    this.log('Response:', data);
-    return data as T;
   }
 
   /**
@@ -136,33 +170,40 @@ export class ApiClient {
     const url = `${this.apiUrl}${this.buildPath('/events')}`;
     this.log('fetch events', url, { count: events.length });
 
-    let response: Response;
+    // A timeout rejects like a network error, so it is retried the same way.
+    const limit = this.timeLimit();
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        // text/plain, as for the beacon: no CORS preflight.
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(payload),
-        keepalive: true,
-      });
-    } catch (error) {
-      this.log('Events not delivered, will retry:', error);
-      return 'retry';
-    }
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          // text/plain, as for the beacon: no CORS preflight.
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload),
+          keepalive: true,
+          signal: limit.signal,
+        });
+      } catch (error) {
+        this.log('Events not delivered, will retry:', error);
+        return 'retry';
+      }
 
-    if (response.ok) {
-      return 'sent';
+      if (response.ok) {
+        return 'sent';
+      }
+      if (isRetryable(response.status)) {
+        this.log(`Events not delivered (${response.status}), will retry`);
+        return 'retry';
+      }
+      if (this.debug) {
+        const body = await response.text().catch(() => '');
+        const noun = events.length === 1 ? 'event' : 'events';
+        this.log(`ember refused ${events.length} ${noun} (${response.status}), dropping:`, body);
+      }
+      return 'refused';
+    } finally {
+      limit.clear();
     }
-    if (isRetryable(response.status)) {
-      this.log(`Events not delivered (${response.status}), will retry`);
-      return 'retry';
-    }
-    if (this.debug) {
-      const body = await response.text().catch(() => '');
-      const noun = events.length === 1 ? 'event' : 'events';
-      this.log(`ember refused ${events.length} ${noun} (${response.status}), dropping:`, body);
-    }
-    return 'refused';
   }
 
   /**
@@ -207,6 +248,7 @@ export class ApiClient {
 
     // Fallback: fire-and-forget fetch (won't work reliably on page navigation)
     this.log('sendBeacon not available, falling back to fetch');
+    const limit = this.timeLimit();
     fetch(url, {
       method: 'POST',
       headers: {
@@ -214,9 +256,12 @@ export class ApiClient {
       },
       body: JSON.stringify(payload),
       keepalive: true, // Helps with page navigation
-    }).catch(() => {
-      // Ignore errors - this is fire-and-forget
-    });
+      signal: limit.signal,
+    })
+      .catch(() => {
+        // Ignore errors - this is fire-and-forget
+      })
+      .finally(limit.clear);
 
     return true;
   }
