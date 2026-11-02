@@ -1,5 +1,41 @@
 # @cuped-io/flame
 
+## 0.10.0
+
+### Minor Changes
+
+- c1a1785: flame-edge picks new visitors' arms from a cached rules file, with no wait and a small cookie (flame#62).
+
+  - Each runtime keeps an in-memory copy of the project's rules file, refreshed in the background about once a minute. Arms are picked with flame's own pick and Holdout draw, from the new `@cuped-io/flame/rules` export. A request never waits on ember: `timeoutMs` is gone, and `/experiments/active` and `/evaluate` are no longer called.
+  - With no rules copy yet, `resolveAssignments` answers `{ prehydrated: null }` at once and the browser picks.
+  - Each request reconciles the visitor's arms with the current rules: a newly started experiment gets an arm, a stopped one drops out, and an arm already held stays when the weights change. The declined-retry logic is gone.
+  - The signed cookie (v2) holds only the visitor id, when it was issued, and an 8-character token per arm. It stays under 1 KB with 20 experiments. A v1 cookie keeps its visitor and arms and is re-signed.
+  - `signPrehydrated`/`verifyAndDecode`/`RetryState` are replaced by `signVisitor`/`verifyVisitor`/`Visitor`.
+  - `readPrehydratedFromCookieHeader(header, { dsn, secret })` and `readPrehydratedForServerComponent(cookies, { dsn, secret })` now take the DSN: the experiments come from the rules copy, not the cookie.
+  - `resolveAssignments` takes `waitUntil`. `createCupedMiddleware` passes Next's `event.waitUntil`, and puts a newly signed cookie on the request it passes on, so the server render has the arms on the first visit. `buildResponse` receives that `NextResponse.next()` init.
+
+- 7d85f14: flame no longer listens to clicks and form submits for goals, and e-commerce auto-detection is gone. A `click`, `submit` or `custom` goal is now counted only when your page fires an event by its name with `flame.track(goal.name)` (or `useTrack()`); cuped matches goals by event name, so the goal's selector is no longer read. The `autoEcommerce` option, the `data-ecommerce` script attribute and the `getEcommerceGoals` and `getActiveEcommerceGoals` exports are removed. The automatic pageview, `track()`, and the experiments they carry are unchanged.
+- e934bfe: flame no longer holds any code that changes or hides the page (flame#63). The apply engine for the eight variant change types, redirects, rollback and markers, the anti-flicker coordination, the React hydration wait, the MutationObserver re-apply, the `history.pushState`/`replaceState` wrapping and the `click` events for changed elements are deleted.
+
+  - Removed exports: `VariantChange`, `TextChange`, `HtmlChange`, `AttributeChange`, `ClassChange`, `StyleChange`, `CssChange`, `VisibilityChange` and `RedirectChange`. `Variant` has no `changes` field.
+  - Removed `FlameConfig` options: `waitForHydration` and `reapplyOnChange`. The script tag no longer reads `data-wait-for-hydration` or `data-reapply`; a tag that still carries them works and they do nothing.
+  - The script-tag bundle (`flame.js`) shrinks from 8,331 to 8,009 bytes gzipped (24,876 to 23,788 bytes minified).
+
+- 0df9f64: Every request flame makes to cuped now has a time limit, 10 seconds by default (flame#58). Set it with the new `requestTimeoutMs` option. A request that runs out counts as failed: with no stored rules file, reads answer control and `init()` completes, and an event batch is kept and sent again, as after a network error. In flame-react, `isLoading` becomes false when the limit passes, whatever `loadingLimitMs` is.
+- 07e8452: flame picks each visitor's variants on the device from your project's rules file (`GET /{api_key}/rules`), with no wait on cuped's server, and counts a visitor in an experiment only when your code reads it (flame#24).
+
+  - `getVariant`, `getAssignedVariantInfo` and `isInVariant` take the experiment's slug or id, and answer at once. The first read of the visitor's variant records it with the page path; an experiment your page never reads is never recorded. A read before flame is ready returns `null` and records nothing.
+  - New: `flame.ready`, a promise that resolves once reads answer, and the `flame:ready` event on `window` at the same moment.
+  - A stored copy of the rules file serves returning visitors at once and is refreshed in the background. If the rules file cannot be fetched and no copy is stored, every read answers control and init still completes.
+  - Holdout members read control and promoted winners are served from the rules file; neither is recorded.
+  - The pageview goes out as soon as flame starts. `track()` events carry only recorded variants.
+  - flame no longer calls `/experiments/active` or `/evaluate`, and no longer changes the page, coordinates with the anti-flicker snippet or sends `click` events for changed elements. Remove the anti-flicker snippet: flame no longer reveals the page it hides.
+  - `Variant`'s `description`, `created_at` and `updated_at` are optional, since the rules file does not carry them.
+
+### Patch Changes
+
+- b653fc8: flame decides whether to send a refused batch of events again by the refusal's `code` (ember#364), not its status: `rate_limited` and `ingest_unavailable` are retried, and every other code is dropped. A refusal with no `code` flame knows is still judged by its status: a 5xx, 408 or 429 is retried (flame#66).
+
 ## 0.9.1
 
 ### Patch Changes
