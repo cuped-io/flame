@@ -1,5 +1,26 @@
 # @cuped-io/flame-react
 
+## 0.5.0
+
+### Minor Changes
+
+- 37baace: flame-react runs on the new core (flame#61). `useExperiment` and `<Experiment>` take the experiment's slug or id.
+
+  - `isLoading` lasts at most the provider's new `loadingLimitMs` prop, 200 ms by default. If the limit passes before flame knows a new visitor's arm, that experiment shows control for the rest of the page view, even if the arm arrives later, and nothing is recorded. `0` means never wait.
+  - With a flame-edge answer (`prehydrated`) or a flame that is already ready, the first render has the arm and `isLoading` is false.
+  - A visitor is recorded in an experiment when a `useExperiment` or `<Experiment>` for it renders a real arm, not when the provider starts. Experiments no rendered component asks for are never recorded.
+
+### Patch Changes
+
+- 0df9f64: Every request flame makes to cuped now has a time limit, 10 seconds by default (flame#58). Set it with the new `requestTimeoutMs` option. A request that runs out counts as failed: with no stored rules file, reads answer control and `init()` completes, and an event batch is kept and sent again, as after a network error. In flame-react, `isLoading` becomes false when the limit passes, whatever `loadingLimitMs` is.
+- Updated dependencies [c1a1785]
+- Updated dependencies [7d85f14]
+- Updated dependencies [b653fc8]
+- Updated dependencies [e934bfe]
+- Updated dependencies [0df9f64]
+- Updated dependencies [07e8452]
+  - @cuped-io/flame@0.10.0
+
 ## 0.4.4
 
 ### Patch Changes
