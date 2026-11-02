@@ -166,7 +166,7 @@ export async function verifyVisitor(
   // BufferSource cast is needed because TS 5.7 narrowed Uint8Array's
   // buffer type to include SharedArrayBuffer; runtime is unchanged.
   const key = await importHmacKey(secret, 'verify');
-  let valid = false;
+  let valid: boolean;
   try {
     valid = await crypto.subtle.verify(
       'HMAC',

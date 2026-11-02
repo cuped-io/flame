@@ -7,6 +7,8 @@ packages:
 overrides:
   # next 15 pins postcss 8.4.31; the fixes are in 8.5.23, which next 16 uses.
   'next>postcss': ^8.5.23
-  # api-extractor, typescript-estree and @eslint/config-array all pin minimatch 10.x;
-  # the globparts DoS fix is in 11.0.1.
+  # api-extractor, typescript-estree and eslint pin minimatch 10.x, and
+  # @vue/language-core (under vite-plugin-dts) pins 9.x; the globparts DoS fix
+  # is in 11.0.1.
+  'minimatch@9': ^11.0.1
   'minimatch@10': ^11.0.1
