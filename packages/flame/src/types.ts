@@ -1,4 +1,11 @@
 /**
+ * The wire types below are flame's view of what it sends to and reads from
+ * ember. They are not exact copies of ember's models: some fields are optional
+ * here because the rules file leaves them out, and fields flame never reads are
+ * left out.
+ */
+
+/**
  * Configuration options for the Flame SDK.
  *
  * Find the DSN under your project's Settings → Install Snippet.
@@ -79,7 +86,7 @@ export interface PrehydratedState {
 }
 
 /**
- * A variant in an experiment (matches the cuped API)
+ * A variant in an experiment
  */
 export interface Variant {
   /** Unique variant ID */
@@ -101,7 +108,7 @@ export interface Variant {
 }
 
 /**
- * Experiment status (matches the cuped API)
+ * Experiment status
  */
 export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed';
 
@@ -117,9 +124,9 @@ export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed';
 export type GoalType = 'click' | 'submit' | 'pageview' | 'custom';
 
 /**
- * A conversion goal for tracking (matches the cuped API). All goal
- * types are matched by event name on the backend; flame fires only the
- * pageview, and the page fires the rest with `flame.track()`.
+ * A conversion goal for tracking. All goal types are matched by event name
+ * on the backend; flame fires only the pageview, and the page fires the rest
+ * with `flame.track()`.
  */
 export interface Goal {
   /**
@@ -141,7 +148,7 @@ export interface Goal {
 }
 
 /**
- * An experiment (matches the cuped API)
+ * An experiment
  */
 export interface Experiment {
   /** Unique experiment ID */
@@ -220,7 +227,7 @@ export interface IdentityMetadata {
 }
 
 /**
- * Request body for creating an assignment (matches the cuped API)
+ * Request body for creating an assignment
  */
 export interface CreateAssignmentRequest {
   /** Pseudonymous user identifier */
@@ -254,7 +261,7 @@ export type Resolution =
   | 'workspace_archived';
 
 /**
- * Response from the assignment endpoint (matches the cuped API)
+ * Response from the assignment endpoint
  */
 export interface AssignmentResponse {
   /** Assignment ID. `null` unless an assignment row was written. */
@@ -316,7 +323,7 @@ export interface StoredAssignment {
 export type AliasType = 'device' | 'session';
 
 /**
- * Request body for linking identities (matches the cuped API)
+ * Request body for linking identities
  */
 export interface CreateIdentityLinkRequest {
   /** The authenticated/canonical user ID */
@@ -330,13 +337,13 @@ export interface CreateIdentityLinkRequest {
 }
 
 /**
- * Response from the identity link endpoint (matches the cuped API)
+ * Response from the identity link endpoint
  */
 export interface IdentityLinkResponse {
   /** Link ID */
   id: string;
-  /** Whether this was a new link or existing */
-  linked: boolean;
+  /** When the link was made or last renewed (ISO timestamp) */
+  linked_at: string;
 }
 
 /**
@@ -350,7 +357,7 @@ export interface ExperimentAssignment {
 }
 
 /**
- * Request body for creating an event (matches the cuped API)
+ * Request body for creating an event
  *
  * Events are the single-event architecture:
  * - Fire ONE event per user action, regardless of experiment count
@@ -371,7 +378,7 @@ export interface CreateEventRequest {
 }
 
 /**
- * Response from the events endpoint (matches the cuped API)
+ * Response from the events endpoint
  */
 export interface EventResponse {
   /** Event ID */
@@ -381,7 +388,7 @@ export interface EventResponse {
 }
 
 /**
- * Request body for the `/events` ingest endpoint (matches the cuped API).
+ * Request body for the `/events` ingest endpoint.
  *
  * The SDK always POSTs this array envelope to `POST /{api_key}/events`,
  * even for a single event (an array of one).
