@@ -73,7 +73,7 @@ function VoteButton({ gameId, option }: { gameId: string; option: string }) {
 
 ## Loading limit
 
-`useExperiment` gives the visitor's variant on the first render when flame already knows it: a flame-edge answer passed as `prehydrated`, or flame already ready. A new visitor needs flame to fetch the project's rules file first. Until then `isLoading` is true and `<Experiment>` renders its `fallback`.
+`useExperiment` gives the visitor's variant on the first render when flame already knows it: a flame-edge answer passed as `prehydrated`, flame already ready, or a returning visitor's saved arm with flame's stored rules file. The saved arm is there on a render that is not a hydration. A hydration gives what the server render gave, and the saved arm comes on the render just after it, so a server-rendered page uses `prehydrated` to avoid that loading render. Once flame is ready, a fresh rules file that stopped the experiment can change the saved arm to control. A new visitor needs flame to fetch the project's rules file first. Until then `isLoading` is true and `<Experiment>` renders its `fallback`.
 
 The wait has a limit, 200 ms by default. If the limit passes first, the experiment shows control for the rest of the page view, even if the variant arrives later, and the visitor is not counted in it. Set the limit on the provider, in milliseconds. `0` means never wait.
 

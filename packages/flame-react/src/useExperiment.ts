@@ -21,7 +21,13 @@ const LOADING: UseExperimentResult = { variant: null, isLoading: true };
  * `key` is the experiment's slug or id. `variant` is the variant to
  * show (id, name, is_control), or `null` for control. The arm is there
  * on the first render when flame already knows it: a flame-edge answer
- * passed to the provider as `prehydrated`, or flame already ready.
+ * passed to the provider as `prehydrated`, flame already ready, or a
+ * returning visitor's saved arm (flame#65). The saved arm is there on a
+ * render that is not a hydration. A hydration gives what the server
+ * render gave, and the saved arm comes on the render just after it; a
+ * server-rendered page avoids that loading render with `prehydrated`.
+ * Once flame is ready, a fresh rules file that stopped the experiment
+ * can change the saved arm to control.
  * Otherwise `isLoading` is true until flame learns the arm or the
  * provider's `loadingLimitMs` passes (default 200 ms). After the limit
  * this experiment shows control for the rest of the page view, even if
@@ -34,7 +40,7 @@ const LOADING: UseExperimentResult = { variant: null, isLoading: true };
  * Must be rendered inside a {@link CupedProvider}.
  */
 export function useExperiment(key: string): UseExperimentResult {
-  const { flame, ready, edge, timedOut, gaveUp } = useContext(CupedContext);
+  const { flame, ready, edge, early, timedOut, gaveUp } = useContext(CupedContext);
 
   return useMemo<UseExperimentResult>(() => {
     if (!flame) return LOADING;
@@ -42,10 +48,12 @@ export function useExperiment(key: string): UseExperimentResult {
     // flame's read records the exposure.
     if (ready) return { variant: flame.getAssignedVariantInfo(key), isLoading: false };
     if (edge) return { variant: edge[key] ?? null, isLoading: false };
+    // The variant the read will give once ready; it records nothing.
+    if (early && Object.hasOwn(early, key)) return { variant: early[key], isLoading: false };
     if (timedOut) {
       gaveUp.add(key);
       return CONTROL;
     }
     return LOADING;
-  }, [flame, ready, edge, timedOut, gaveUp, key]);
+  }, [flame, ready, edge, early, timedOut, gaveUp, key]);
 }

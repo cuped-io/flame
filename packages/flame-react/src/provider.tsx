@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   flame as defaultFlame,
   type Flame,
@@ -6,10 +6,17 @@ import {
   type PrehydratedState,
   type Variant,
 } from '@cuped-io/flame';
+import { earlyArms } from '@cuped-io/flame/rules';
 import { CupedContext, type CupedContextValue } from './context';
 
 /** How long `useExperiment` may report `isLoading` by default (flame#61). */
 const DEFAULT_LOADING_LIMIT_MS = 200;
+
+// For useSyncExternalStore: whether this render is a hydration. Nothing
+// changes it, so nothing subscribes.
+const subscribeNever = () => () => {};
+const notHydrating = () => false;
+const isHydrating = () => true;
 
 export interface CupedProviderProps extends FlameConfig {
   children: ReactNode;
@@ -91,6 +98,12 @@ function edgeVariants(state: PrehydratedState | undefined): Record<string, Varia
  * Without `prehydrated`, the server render reports `isLoading` (or
  * control, with `loadingLimitMs={0}`), and the client waits up to
  * `loadingLimitMs` for flame to learn the visitor's arms.
+ *
+ * **Returning visitors.** On a render that is not a hydration, a
+ * returning visitor's saved arm is there at once, from flame's stored
+ * rules file (flame#65). A hydration gives what the server render gave,
+ * so a server-rendered page uses `prehydrated` to avoid the loading
+ * render.
  */
 export function CupedProvider({
   children,
@@ -105,11 +118,23 @@ export function CupedProvider({
   // useExperiment can answer before any effect runs.
   const edge = useMemo(() => edgeVariants(prehydrated), [prehydrated]);
 
-  const [ready, setReady] = useState(() => flame.isInitialized());
+  // A hydration gives what the server render gave: no early answer, and
+  // not ready. React renders again with the browser's values right after.
+  const hydrating = useSyncExternalStore(subscribeNever, notHydrating, isHydrating);
+  const { dsn, requireConsent } = flameConfig;
+  const early = useMemo(
+    () => (hydrating || edge ? null : earlyArms({ dsn, requireConsent })),
+    [hydrating, edge, dsn, requireConsent]
+  );
+
+  const [initDone, setInitDone] = useState(() => flame.isInitialized());
+  const ready = initDone && !hydrating;
   const [timedOut, setTimedOut] = useState(() => loadingLimitMs <= 0);
   // Mutated during render by the hooks that give up. Each key is added at
   // most once and never removed, so a repeated render changes nothing.
   const gaveUp = useRef(new Set<string>()).current;
+  // Strict Mode runs the effect twice: the second run joins the first init.
+  const init = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (ready || timedOut) return;
@@ -121,19 +146,17 @@ export function CupedProvider({
     let cancelled = false;
 
     if (flame.isInitialized()) {
-      setReady(true);
+      setInitDone(true);
       return;
     }
 
-    flame
-      .init({ ...flameConfig, prehydrated })
-      .catch((err: unknown) => {
-        console.error('[CupedProvider] flame.init failed:', err);
-      })
-      .then(() => {
-        // After a failed init, flame's reads answer null: control.
-        if (!cancelled) setReady(true);
-      });
+    init.current ??= flame.init({ ...flameConfig, prehydrated }).catch((err: unknown) => {
+      console.error('[CupedProvider] flame.init failed:', err);
+    });
+    void init.current.then(() => {
+      // After a failed init, flame's reads answer null: control.
+      if (!cancelled) setInitDone(true);
+    });
 
     return () => {
       cancelled = true;
@@ -142,8 +165,8 @@ export function CupedProvider({
   }, [flame]);
 
   const value = useMemo<CupedContextValue>(
-    () => ({ flame, ready, edge, timedOut, gaveUp }),
-    [flame, ready, edge, timedOut, gaveUp]
+    () => ({ flame, ready, edge, early, timedOut, gaveUp }),
+    [flame, ready, edge, early, timedOut, gaveUp]
   );
 
   return <CupedContext.Provider value={value}>{children}</CupedContext.Provider>;

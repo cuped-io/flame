@@ -6,7 +6,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Flame } from './index';
-import type { RulesFile } from './rules';
+import { earlyArms, type RulesFile } from './rules';
+import type { FlameConfig } from './types';
 
 const API_KEY = '0123456789abcdef0123456789abcdef';
 const DSN = `https://${API_KEY}@example.com`;
@@ -120,8 +121,8 @@ describe('a new visitor', () => {
 });
 
 /** Visit once, read the arm, and let the record go out: a returning visitor's state. */
-async function visitAndRead() {
-  stubApi();
+async function visitAndRead(rules: RulesFile = rulesFile()) {
+  stubApi(rules);
   const first = fresh();
   await first.init({ dsn: DSN, enableBatching: false });
   first.getVariant(EXP);
@@ -155,22 +156,167 @@ describe('a returning visitor', () => {
   });
 });
 
-describe('from the rules file', () => {
-  // Golden vectors: user_1's bucket for this Holdout is 2921, under 100%.
-  const holdout = { id: '550e8400-e29b-41d4-a716-446655440000', percentage: 100, active: true };
-  const promoted = {
-    id: '99999999-9999-9999-9999-999999999999',
-    slug: 'old-test',
-    url_pattern: null,
-    winner_promoted_at: '2026-01-01T00:00:00Z',
-    winner: {
-      id: '88888888-8888-8888-8888-888888888888',
-      name: 'Winner',
-      is_control: false,
-      weight: 1,
-    },
-  };
+// Golden vectors: user_1's draw for this Holdout is 2921, under 100%.
+const holdout = { id: '550e8400-e29b-41d4-a716-446655440000', percentage: 100, active: true };
+const promoted = {
+  id: '99999999-9999-9999-9999-999999999999',
+  slug: 'old-test',
+  url_pattern: null,
+  winner_promoted_at: '2026-01-01T00:00:00Z',
+  winner: {
+    id: '88888888-8888-8888-8888-888888888888',
+    name: 'Winner',
+    is_control: false,
+    weight: 1,
+  },
+};
 
+describe('the early answer', () => {
+  /**
+   * The early answers on a fresh load, then what a read of `key` gives once
+   * flame is ready there. The rules fetch never answers: the stored copy serves.
+   */
+  async function earlyThenRead(key: string, config: FlameConfig = { dsn: DSN }) {
+    stubApi(rulesFile(), new Promise(() => {}));
+    const flame = fresh();
+    const answers = earlyArms({ dsn: config.dsn, requireConsent: config.requireConsent });
+    await flame.init({ ...config, enableBatching: false, requestTimeoutMs: 50 });
+    return { answers, read: flame.getAssignedVariantInfo(key) };
+  }
+
+  it("is a returning visitor's saved arm, by id and slug, as the read is once ready", async () => {
+    await visitAndRead();
+    const { answers, read } = await earlyThenRead('hero-cta');
+    expect(read?.id).toBe(TREATMENT);
+    expect(answers['hero-cta']).toEqual(read);
+    expect(answers[EXP]).toEqual(read);
+  });
+
+  it('is not given, and does not throw, for a DSN flame cannot read', async () => {
+    await visitAndRead();
+    expect(earlyArms({ dsn: 'not a dsn' })).toEqual({});
+  });
+
+  it('makes no request, writes nothing, and creates no device id', async () => {
+    await visitAndRead();
+    stubApi();
+    const returning = { ...localStorage };
+    earlyArms({ dsn: DSN });
+    expect({ ...localStorage }).toEqual(returning);
+
+    localStorage.clear();
+    expect(earlyArms({ dsn: DSN })).toEqual({});
+    expect(localStorage.length).toBe(0);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(requests).toEqual([]);
+  });
+
+  it('is not given to a Holdout member, whose control only the draw tells', async () => {
+    localStorage.setItem('flame_device_id', 'user_1');
+    stubApi(rulesFile({ holdout, promoted: [promoted] }));
+    await fresh().init({ dsn: DSN, enableBatching: false });
+    const { answers, read } = await earlyThenRead('hero-cta');
+    expect(read?.id).toBe(CONTROL);
+    expect(answers).toEqual({});
+  });
+
+  it('is not given while consent is pending, though an arm is saved', async () => {
+    await visitAndRead();
+    const { answers, read } = await earlyThenRead('hero-cta', { dsn: DSN, requireConsent: true });
+    expect(read).toBeNull();
+    expect(answers).toEqual({});
+  });
+
+  it('is not given to a visitor who withdrew consent on an earlier page', async () => {
+    await visitAndRead();
+    stubApi(rulesFile(), new Promise(() => {}));
+    await fresh().init({ dsn: DSN, enableBatching: false, requestTimeoutMs: 50 });
+    started.at(-1)?.consent(false);
+    const { answers, read } = await earlyThenRead('hero-cta');
+    expect(read).toBeNull();
+    expect(answers).toEqual({});
+  });
+
+  it('is not given when the browser sends Global Privacy Control', async () => {
+    await visitAndRead();
+    vi.stubGlobal('navigator', { ...navigator, globalPrivacyControl: true });
+    try {
+      const { answers, read } = await earlyThenRead('hero-cta');
+      expect(read).toBeNull();
+      expect(answers).toEqual({});
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("is the saved arm on a page outside the experiment's pattern, as the read is", async () => {
+    const patterned = rulesFile({
+      experiments: [{ ...rulesFile().experiments[0], url_pattern: '/pricing' }],
+    });
+    window.history.pushState({}, '', '/pricing');
+    await visitAndRead(patterned);
+    window.history.pushState({}, '', '/');
+    const { answers, read } = await earlyThenRead('hero-cta');
+    expect(read?.id).toBe(TREATMENT);
+    expect(answers['hero-cta']).toEqual(read);
+  });
+
+  it.each([
+    ['on', '/pricing', 'Winner'],
+    ['off', '/', null],
+  ])(
+    'is a promoted winner %s its pattern as the read is, for a visitor with a saved arm',
+    async (_where, path, expected) => {
+      await visitAndRead(rulesFile({ promoted: [{ ...promoted, url_pattern: '/pricing' }] }));
+      window.history.pushState({}, '', path);
+      const { answers, read } = await earlyThenRead('old-test');
+      window.history.pushState({}, '', '/');
+      expect(read?.name ?? null).toBe(expected);
+      expect(answers['old-test']).toEqual(read);
+      expect(answers[promoted.id]).toEqual(read);
+    }
+  );
+
+  it('is not given from a stored rules file of another version', async () => {
+    await visitAndRead();
+    localStorage.setItem(`flame_rules_${API_KEY}`, JSON.stringify({ ...rulesFile(), version: 2 }));
+    const { answers, read } = await earlyThenRead('hero-cta');
+    expect(read).toBeNull();
+    expect(answers).toEqual({});
+  });
+
+  it('is not given from an arm saved for another user id', async () => {
+    await visitAndRead();
+    const other = fresh();
+    await other.identify('user-2');
+    try {
+      expect(earlyArms({ dsn: DSN })).toEqual({});
+    } finally {
+      other.clearIdentity();
+    }
+  });
+
+  it('is not given from a saved variant the rules file no longer lists', async () => {
+    await visitAndRead();
+    const [experiment] = rulesFile().experiments;
+    const replaced = {
+      id: '33333333-3333-3333-3333-333333333333',
+      name: 'New',
+      is_control: false,
+      weight: 3,
+    };
+    stubApi(
+      rulesFile({ experiments: [{ ...experiment, variants: [experiment.variants[0], replaced] }] })
+    );
+    await fresh().init({ dsn: DSN, enableBatching: false });
+    // The fresh rules file is stored once its fetch answers.
+    await vi.waitFor(() => expect(requests).toContain(`https://example.com/${API_KEY}/rules`));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(earlyArms({ dsn: DSN })).toEqual({});
+  });
+});
+
+describe('from the rules file', () => {
   it('a Holdout member reads control and is never recorded', async () => {
     localStorage.setItem('flame_device_id', 'user_1');
     stubApi(rulesFile({ holdout, promoted: [promoted] }));

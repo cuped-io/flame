@@ -219,6 +219,23 @@ export function getIdentity(): Identity {
 }
 
 /**
+ * The effective user ID flame already holds, if any. Unlike
+ * {@link getIdentity}, it creates and stores nothing.
+ */
+export function existingUserId(): string | null {
+  try {
+    return (
+      authenticatedUserId ??
+      localStorage.getItem(AUTHENTICATED_ID_KEY) ??
+      localStorage.getItem(DEVICE_ID_KEY) ??
+      sessionUserId
+    );
+  } catch {
+    return authenticatedUserId ?? sessionUserId;
+  }
+}
+
+/**
  * Get the effective user ID for API calls
  *
  * Convenience method that returns just the user ID.

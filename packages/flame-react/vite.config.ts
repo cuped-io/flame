@@ -3,8 +3,8 @@ import { resolve } from 'path';
 import dts from 'vite-plugin-dts';
 
 // ESM + CJS build for @cuped-io/flame-react. React + react-dom are peer
-// deps; @cuped-io/flame is a runtime dep but we externalize it so the
-// consumer dedupes on a single flame instance.
+// deps; @cuped-io/flame is a runtime dep, but we externalize it and its
+// /rules subpath so the consumer dedupes on a single flame instance.
 export default defineConfig({
   plugins: [
     dts({
@@ -24,7 +24,7 @@ export default defineConfig({
     minify: false,
     sourcemap: true,
     rollupOptions: {
-      external: ['react', 'react-dom', 'react/jsx-runtime', '@cuped-io/flame'],
+      external: ['react', 'react-dom', 'react/jsx-runtime', /^@cuped-io\/flame(\/.*)?$/],
       output: {
         exports: 'named',
       },

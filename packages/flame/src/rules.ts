@@ -7,6 +7,11 @@
 import type { StoredAssignment, Variant } from './types';
 import { selectVariantDeterministically } from './bucketing';
 import { isHeldOut } from './holdout';
+import { savedArms } from './assignment';
+import { consentAllowsRunning, initialConsentState } from './consent';
+import { parseDsn } from './dsn';
+import { existingUserId } from './identity';
+import { runsOnThisPage } from './url-pattern';
 
 /** The wire version flame reads. A file of any other version is not used. */
 export const RULES_FILE_VERSION = 1;
@@ -136,6 +141,53 @@ export async function pickArms(
     });
   }
   return arms;
+}
+
+/**
+ * The early answers (flame#65): for each experiment flame knows the arm of
+ * now, by id and slug, the variant a read will give once flame is ready
+ * (`null`: control). Synchronous, from the saved arms and the stored rules
+ * file alone. It sends nothing, records nothing, and stores nothing.
+ *
+ * Only a saved arm, whose variant the rules file still lists, is known now.
+ * A visitor with one is not drawn for the Holdout, so their promoted winners
+ * are known too. Everything else needs the async hash, and is left out.
+ *
+ * @internal For flame-react's first render. Not part of flame's API.
+ */
+export function earlyArms(config: {
+  dsn: string;
+  requireConsent?: boolean;
+}): Record<string, Variant | null> {
+  const answers: Record<string, Variant | null> = {};
+  // Without consent, flame has no saved arms to give (flame#18).
+  if (!consentAllowsRunning(initialConsentState(!!config.requireConsent))) return answers;
+  let apiKey: string;
+  try {
+    apiKey = parseDsn(config.dsn).apiKey;
+  } catch {
+    // init() reports the DSN. A throw here would break the first render.
+    return answers;
+  }
+  const rules = loadStoredRules(apiKey);
+  const userId = existingUserId();
+  if (!rules || !userId) return answers;
+
+  const saved = savedArms();
+  for (const experiment of rules.experiments) {
+    const arm = saved[experiment.id];
+    const variant = experiment.variants.find((v) => v.id === arm?.variantId);
+    if (arm?.userId !== userId || !variant) continue;
+    // Recorded on an earlier visit, so read on any page (flame#50).
+    answers[experiment.id] = answers[experiment.slug] = toVariant(experiment.id, variant);
+  }
+  if (Object.keys(answers).length === 0) return answers;
+  for (const promoted of rules.promoted) {
+    // Never recorded: shown only on its pages, as a read does.
+    const answer = runsOnThisPage(promoted) ? toVariant(promoted.id, promoted.winner) : null;
+    answers[promoted.id] = answers[promoted.slug] = answer;
+  }
+  return answers;
 }
 
 /**
